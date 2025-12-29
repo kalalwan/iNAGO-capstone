@@ -12,8 +12,9 @@ export async function POST(req: Request) {
 
   // 1. Synthesize a "Group Query" from preferences AND persistent memories
   const currentPrefs = Object.values(preferences || {}).join(' ');
-  const persistentPrefs = Object.values(userMemories || {})
-    .map((m: { preferences?: string }) => m.preferences || '')
+  const memoryValues = Object.values(userMemories || {}) as { preferences?: string }[];
+  const persistentPrefs = memoryValues
+    .map((m) => m.preferences || '')
     .join(' ');
   const groupQuery = `${currentPrefs} ${persistentPrefs}`.trim();
 
