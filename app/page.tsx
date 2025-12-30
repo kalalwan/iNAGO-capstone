@@ -2,24 +2,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { USERS } from '@/lib/data';
-import { Message } from '@/lib/types';
-import { Send, Sparkles, User, RotateCcw, Trash2 } from 'lucide-react';
+import { Message, StructuredUserProfile, GroupFairnessMetrics, UserSatisfactionResult, FairnessMode } from '@/lib/types';
+import { Send, Sparkles, User, RotateCcw, Trash2, Scale, TrendingUp, Users, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Persistent memory type for each user
-interface UserMemory {
-  preferences: string;
-  dietaryRestrictions: string[];
-  favoriteCuisines: string[];
-  pricePreference: string;
-  locationPreference: string;
-  lastUpdated: number;
-}
+const STORAGE_KEY = 'inago-user-profiles-v2';
 
-const STORAGE_KEY = 'inago-user-memories';
-
-// Load memories from localStorage
-const loadMemories = (): Record<string, UserMemory> => {
+// Load profiles from localStorage
+const loadProfiles = (): Record<string, StructuredUserProfile> => {
   if (typeof window === 'undefined') return {};
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -29,11 +19,69 @@ const loadMemories = (): Record<string, UserMemory> => {
   }
 };
 
-// Save memories to localStorage
-const saveMemories = (memories: Record<string, UserMemory>) => {
+// Save profiles to localStorage
+const saveProfiles = (profiles: Record<string, StructuredUserProfile>) => {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(memories));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
 };
+
+// Helper to get profile summary
+const getProfileSummary = (profile: StructuredUserProfile): string => {
+  const parts: string[] = [];
+
+  if (profile.dietary.restrictions.length > 0) {
+    const restrictions = profile.dietary.restrictions.map(r =>
+      r.strictness === 'strict' ? r.type.toUpperCase() : r.type
+    );
+    parts.push(restrictions.join(', '));
+  }
+
+  if (profile.dietary.allergies.length > 0) {
+    parts.push(`allergic to ${profile.dietary.allergies.join(', ')}`);
+  }
+
+  if (profile.cuisinePreferences.favorites.length > 0) {
+    const top3 = profile.cuisinePreferences.favorites.slice(0, 3).map(c => c.cuisine);
+    parts.push(`likes ${top3.join(', ')}`);
+  }
+
+  if (profile.budget.preferred) {
+    const priceLabels: Record<string, string> = {
+      $: 'budget-friendly',
+      $$: 'moderate',
+      $$$: 'upscale',
+      $$$$: 'luxury',
+    };
+    parts.push(priceLabels[profile.budget.preferred] || profile.budget.preferred);
+  }
+
+  if (profile.location.preferredAreas.length > 0) {
+    parts.push(`prefers ${profile.location.preferredAreas[0]}`);
+  }
+
+  return parts.length > 0 ? parts.join(' • ') : 'No preferences saved yet';
+};
+
+interface CandidateRestaurant {
+  id: string;
+  name: string;
+  cuisine: string;
+  price: string;
+  rating: number;
+  location: string;
+  address: string;
+  score: number;
+  fairnessMetrics?: GroupFairnessMetrics;
+  userSatisfaction?: UserSatisfactionResult[];
+}
+
+interface FairnessResultData {
+  restaurantId: string;
+  restaurantName: string;
+  metrics: GroupFairnessMetrics;
+  userSatisfaction: UserSatisfactionResult[];
+  isParetoEfficient: boolean;
+}
 
 export default function Home() {
   const [activeUser, setActiveUser] = useState(USERS[0]);
@@ -41,30 +89,34 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [preferences, setPreferences] = useState<Record<string, string>>({});
   const [recommendation, setRecommendation] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<{ id: string; name: string; cuisine: string; price: string; rating: number; location: string; score: number }[]>([]);
+  const [candidates, setCandidates] = useState<CandidateRestaurant[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalRestaurants, setTotalRestaurants] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Persistent user memories
-  const [userMemories, setUserMemories] = useState<Record<string, UserMemory>>({});
+  // User profiles (structured)
+  const [userProfiles, setUserProfiles] = useState<Record<string, StructuredUserProfile>>({});
+
+  // Fairness state
+  const [fairnessMode, setFairnessMode] = useState<FairnessMode>('balanced');
+  const [fairnessResult, setFairnessResult] = useState<FairnessResultData | null>(null);
 
   // Resizable panel state
-  const [leftPanelWidth, setLeftPanelWidth] = useState(50); // percentage
+  const [leftPanelWidth, setLeftPanelWidth] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load memories on mount
+  // Load profiles on mount
   useEffect(() => {
-    setUserMemories(loadMemories());
+    setUserProfiles(loadProfiles());
   }, []);
 
-  // Save memories whenever they change
+  // Save profiles whenever they change
   useEffect(() => {
-    if (Object.keys(userMemories).length > 0) {
-      saveMemories(userMemories);
+    if (Object.keys(userProfiles).length > 0) {
+      saveProfiles(userProfiles);
     }
-  }, [userMemories]);
+  }, [userProfiles]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -75,11 +127,8 @@ export default function Home() {
   // Handle mouse move for resizing
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging || !containerRef.current) return;
-
     const containerRect = containerRef.current.getBoundingClientRect();
     const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100;
-
-    // Clamp between 25% and 75%
     setLeftPanelWidth(Math.min(75, Math.max(25, newWidth)));
   }, [isDragging]);
 
@@ -121,7 +170,6 @@ export default function Home() {
     setMessages(newMessages);
     setInput("");
 
-    // Trigger analysis every time (for MVP responsiveness)
     analyzeChat(newMessages);
   };
 
@@ -131,37 +179,23 @@ export default function Home() {
         method: 'POST',
         body: JSON.stringify({
           messages: msgs,
-          existingMemories: userMemories
+          existingProfiles: userProfiles
         }),
       });
       const data = await res.json();
-      // Only set preferences if we got valid data (not an error response)
-      if (!data.error && typeof data === 'object') {
-        setPreferences(data.preferences || data);
 
-        // Update persistent memories if returned
-        if (data.updatedMemories) {
-          setUserMemories(prev => ({
+      if (!data.error) {
+        // Update preferences for current session display
+        if (data.preferences) {
+          setPreferences(data.preferences);
+        }
+
+        // Update structured profiles
+        if (data.profiles) {
+          setUserProfiles(prev => ({
             ...prev,
-            ...data.updatedMemories
+            ...data.profiles
           }));
-        } else {
-          // Fallback: update memories from preferences
-          const newMemories: Record<string, UserMemory> = { ...userMemories };
-          Object.entries(data.preferences || data).forEach(([userName, pref]) => {
-            const userId = USERS.find(u => u.name === userName)?.id;
-            if (userId && typeof pref === 'string') {
-              newMemories[userId] = {
-                preferences: pref,
-                dietaryRestrictions: extractDietaryRestrictions(pref),
-                favoriteCuisines: extractCuisines(pref),
-                pricePreference: extractPricePreference(pref),
-                locationPreference: extractLocationPreference(pref),
-                lastUpdated: Date.now()
-              };
-            }
-          });
-          setUserMemories(newMemories);
         }
       }
     } catch (e) {
@@ -169,61 +203,30 @@ export default function Home() {
     }
   };
 
-  // Helper functions to extract info from preference strings
-  const extractDietaryRestrictions = (pref: string): string[] => {
-    const restrictions: string[] = [];
-    const lower = pref.toLowerCase();
-    if (lower.includes('vegan')) restrictions.push('vegan');
-    if (lower.includes('vegetarian')) restrictions.push('vegetarian');
-    if (lower.includes('gluten-free') || lower.includes('gluten free')) restrictions.push('gluten-free');
-    if (lower.includes('halal')) restrictions.push('halal');
-    if (lower.includes('kosher')) restrictions.push('kosher');
-    if (lower.includes('dairy-free') || lower.includes('dairy free')) restrictions.push('dairy-free');
-    return restrictions;
-  };
-
-  const extractCuisines = (pref: string): string[] => {
-    const cuisines: string[] = [];
-    const lower = pref.toLowerCase();
-    const cuisineTypes = ['italian', 'chinese', 'japanese', 'thai', 'indian', 'mexican', 'korean', 'vietnamese', 'bbq', 'seafood', 'sushi', 'pizza', 'burger', 'asian', 'mediterranean'];
-    cuisineTypes.forEach(c => {
-      if (lower.includes(c)) cuisines.push(c);
-    });
-    return cuisines;
-  };
-
-  const extractPricePreference = (pref: string): string => {
-    const lower = pref.toLowerCase();
-    if (lower.includes('cheap') || lower.includes('budget') || lower.includes('affordable')) return 'budget';
-    if (lower.includes('expensive') || lower.includes('upscale') || lower.includes('fancy')) return 'upscale';
-    if (lower.includes('moderate') || lower.includes('mid-range')) return 'moderate';
-    return '';
-  };
-
-  const extractLocationPreference = (pref: string): string => {
-    const lower = pref.toLowerCase();
-    if (lower.includes('downtown')) return 'downtown';
-    if (lower.includes('midtown')) return 'midtown';
-    if (lower.includes('north')) return 'north';
-    return '';
-  };
-
   const getRecommendation = async () => {
     setLoading(true);
     setRecommendation(null);
+    setFairnessResult(null);
+
     try {
       const res = await fetch('/api/recommend', {
         method: 'POST',
         body: JSON.stringify({
           messages,
           preferences,
-          userMemories // Include persistent memories
+          userProfiles,
+          fairnessMode
         }),
       });
       const data = await res.json();
+
       setCandidates(data.candidates || []);
       setRecommendation(data.recommendation || null);
       setTotalRestaurants(data.totalRestaurants || 0);
+
+      if (data.fairnessResult) {
+        setFairnessResult(data.fairnessResult);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -237,27 +240,150 @@ export default function Home() {
     setRecommendation(null);
     setCandidates([]);
     setTotalRestaurants(0);
+    setFairnessResult(null);
     setInput("");
   };
 
-  const resetUserMemory = (userId: string) => {
-    setUserMemories(prev => {
-      const newMemories = { ...prev };
-      delete newMemories[userId];
-      saveMemories(newMemories);
-      return newMemories;
+  const resetUserProfile = (userId: string) => {
+    setUserProfiles(prev => {
+      const newProfiles = { ...prev };
+      delete newProfiles[userId];
+      saveProfiles(newProfiles);
+      return newProfiles;
     });
   };
 
-  const resetAllMemories = () => {
-    setUserMemories({});
+  const resetAllProfiles = () => {
+    setUserProfiles({});
     localStorage.removeItem(STORAGE_KEY);
   };
 
-  // Get memory for display
-  const getUserMemory = (userId: string): UserMemory | null => {
-    return userMemories[userId] || null;
+  const getUserProfile = (userId: string): StructuredUserProfile | null => {
+    return userProfiles[userId] || null;
   };
+
+  // Confidence indicator component
+  const ConfidenceBar = ({ confidence }: { confidence: number }) => (
+    <div className="w-full h-1.5 bg-gray-200 rounded-full mt-1">
+      <div
+        className={cn(
+          "h-full rounded-full transition-all",
+          confidence > 0.7 ? "bg-green-500" :
+          confidence > 0.4 ? "bg-yellow-500" : "bg-gray-400"
+        )}
+        style={{ width: `${confidence * 100}%` }}
+      />
+    </div>
+  );
+
+  // Fairness mode selector
+  const FairnessModeSelector = () => (
+    <div className="flex items-center gap-2 mb-4">
+      <Scale size={16} className="text-gray-500" />
+      <span className="text-xs font-medium text-gray-500">Fairness Mode:</span>
+      <div className="flex gap-1">
+        {(['balanced', 'egalitarian', 'utilitarian'] as FairnessMode[]).map(mode => (
+          <button
+            key={mode}
+            onClick={() => setFairnessMode(mode)}
+            className={cn(
+              "px-2 py-1 text-xs rounded-md transition-colors",
+              fairnessMode === mode
+                ? "bg-indigo-600 text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            )}
+            title={
+              mode === 'balanced' ? 'Balance overall happiness with fairness' :
+              mode === 'egalitarian' ? 'Prioritize the least happy person' :
+              'Maximize total group happiness'
+            }
+          >
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  // Fairness metrics display
+  const FairnessMetricsCard = ({ metrics, userSatisfaction }: {
+    metrics: GroupFairnessMetrics;
+    userSatisfaction: UserSatisfactionResult[];
+  }) => (
+    <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 mb-4">
+      <h4 className="font-semibold text-sm text-indigo-800 mb-3 flex items-center gap-2">
+        <Scale size={16} />
+        Fairness Analysis
+      </h4>
+
+      {/* Metrics Grid */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="bg-white/60 rounded-lg p-2">
+          <div className="text-xs text-gray-500 flex items-center gap-1">
+            <TrendingUp size={12} />
+            Avg Satisfaction
+          </div>
+          <div className="text-lg font-bold text-indigo-700">
+            {(metrics.utilitarian * 100).toFixed(0)}%
+          </div>
+        </div>
+        <div className="bg-white/60 rounded-lg p-2">
+          <div className="text-xs text-gray-500 flex items-center gap-1">
+            <Users size={12} />
+            Min Satisfaction
+          </div>
+          <div className="text-lg font-bold text-purple-700">
+            {(metrics.egalitarian * 100).toFixed(0)}%
+          </div>
+        </div>
+        <div className="bg-white/60 rounded-lg p-2 col-span-2">
+          <div className="text-xs text-gray-500">Inequality Index (lower is better)</div>
+          <div className="w-full h-2 bg-gray-200 rounded-full mt-1">
+            <div
+              className={cn(
+                "h-full rounded-full",
+                metrics.gini < 0.2 ? "bg-green-500" :
+                metrics.gini < 0.4 ? "bg-yellow-500" : "bg-red-500"
+              )}
+              style={{ width: `${metrics.gini * 100}%` }}
+            />
+          </div>
+          <div className="text-xs text-gray-400 mt-1">{(metrics.gini * 100).toFixed(0)}% inequality</div>
+        </div>
+      </div>
+
+      {/* Per-user satisfaction */}
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-gray-600">Per-Person Satisfaction</div>
+        {userSatisfaction.map(u => (
+          <div key={u.userId} className="flex items-center gap-2">
+            <span className="text-xs w-16 truncate">{u.userName}</span>
+            <div className="flex-1 h-2 bg-gray-200 rounded-full">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  u.satisfied ? (
+                    u.score > 0.7 ? "bg-green-500" :
+                    u.score > 0.4 ? "bg-yellow-500" : "bg-orange-500"
+                  ) : "bg-red-500"
+                )}
+                style={{ width: `${u.score * 100}%` }}
+              />
+            </div>
+            <span className={cn(
+              "text-xs font-mono w-10",
+              u.satisfied ? "text-gray-600" : "text-red-600"
+            )}>
+              {(u.score * 100).toFixed(0)}%
+            </span>
+            {!u.satisfied && (
+              <AlertCircle size={12} className="text-red-500" />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <main ref={containerRef} className="flex h-screen bg-gray-50 text-gray-900 font-sans">
@@ -358,15 +484,15 @@ export default function Home() {
         style={{ width: `${100 - leftPanelWidth}%` }}
       >
 
-        {/* Persistent User Memories */}
+        {/* Persistent User Profiles */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Persistent User Profiles</h2>
-            {Object.keys(userMemories).length > 0 && (
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">User Profiles</h2>
+            {Object.keys(userProfiles).length > 0 && (
               <button
-                onClick={resetAllMemories}
+                onClick={resetAllProfiles}
                 className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
-                title="Reset all memories"
+                title="Reset all profiles"
               >
                 <Trash2 size={12} />
                 Clear All
@@ -375,7 +501,7 @@ export default function Home() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             {USERS.map((u) => {
-              const memory = getUserMemory(u.id);
+              const profile = getUserProfile(u.id);
               return (
                 <div key={u.id} className={cn("p-3 rounded-lg shadow-sm border", u.color, "bg-opacity-50")}>
                   <div className="flex items-center justify-between mb-1">
@@ -383,37 +509,55 @@ export default function Home() {
                       <User size={14} className="text-gray-500"/>
                       <span className="font-semibold text-sm">{u.name}</span>
                     </div>
-                    {memory && (
+                    {profile && (
                       <button
-                        onClick={() => resetUserMemory(u.id)}
+                        onClick={() => resetUserProfile(u.id)}
                         className="text-gray-400 hover:text-red-500 transition-colors"
-                        title={`Reset ${u.name}'s memory`}
+                        title={`Reset ${u.name}'s profile`}
                       >
                         <Trash2 size={12} />
                       </button>
                     )}
                   </div>
-                  {memory ? (
+                  {profile ? (
                     <div className="text-xs text-gray-600 space-y-1">
-                      <p className="leading-relaxed">{memory.preferences}</p>
-                      {memory.dietaryRestrictions.length > 0 && (
+                      <p className="leading-relaxed">{getProfileSummary(profile)}</p>
+
+                      {/* Dietary tags */}
+                      {profile.dietary.restrictions.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {memory.dietaryRestrictions.map(r => (
-                            <span key={r} className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px]">
-                              {r}
+                          {profile.dietary.restrictions.map(r => (
+                            <span
+                              key={r.type}
+                              className={cn(
+                                "px-1.5 py-0.5 rounded text-[10px]",
+                                r.strictness === 'strict'
+                                  ? "bg-red-100 text-red-700"
+                                  : "bg-green-100 text-green-700"
+                              )}
+                            >
+                              {r.type}
                             </span>
                           ))}
                         </div>
                       )}
-                      {memory.favoriteCuisines.length > 0 && (
+
+                      {/* Cuisine tags */}
+                      {profile.cuisinePreferences.favorites.length > 0 && (
                         <div className="flex flex-wrap gap-1">
-                          {memory.favoriteCuisines.map(c => (
-                            <span key={c} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px]">
-                              {c}
+                          {profile.cuisinePreferences.favorites.slice(0, 3).map(c => (
+                            <span key={c.cuisine} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px]">
+                              {c.cuisine}
                             </span>
                           ))}
                         </div>
                       )}
+
+                      {/* Confidence bar */}
+                      <div className="mt-2">
+                        <span className="text-[10px] text-gray-400">Profile confidence</span>
+                        <ConfidenceBar confidence={profile.confidence.overall} />
+                      </div>
                     </div>
                   ) : (
                     <p className="text-xs text-gray-400 italic">No preferences saved yet</p>
@@ -426,7 +570,7 @@ export default function Home() {
 
         <hr className="border-gray-200 my-4" />
 
-        {/* Live Group Model (from current chat) */}
+        {/* Live Session Preferences */}
         <div className="mb-6">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Current Session</h2>
           <div className="grid grid-cols-2 gap-3">
@@ -440,63 +584,94 @@ export default function Home() {
               </div>
             ))}
             {Object.keys(preferences).length === 0 && (
-                <div className="text-sm text-gray-400 italic col-span-2">Chat preferences will appear here...</div>
+              <div className="text-sm text-gray-400 italic col-span-2">Chat preferences will appear here...</div>
             )}
           </div>
         </div>
 
         <hr className="border-gray-200 my-4" />
 
+        {/* Fairness Mode Selector */}
+        <FairnessModeSelector />
+
         {/* Action Area */}
         <div className="flex flex-col gap-4">
-            <button
-              onClick={getRecommendation}
-              disabled={messages.length === 0 || loading}
-              className="flex items-center justify-center gap-2 w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-xl font-medium shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <span className="animate-pulse">Thinking...</span>
-              ) : (
-                <>
-                  <Sparkles size={18} />
-                  Generate Recommendation
-                </>
-              )}
-            </button>
+          <button
+            onClick={getRecommendation}
+            disabled={messages.length === 0 || loading}
+            className="flex items-center justify-center gap-2 w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-xl font-medium shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? (
+              <span className="animate-pulse">Analyzing fairness...</span>
+            ) : (
+              <>
+                <Sparkles size={18} />
+                Generate Fair Recommendation
+              </>
+            )}
+          </button>
 
-            {/* Retrieval Results */}
-            {candidates.length > 0 && (
-                <div className="mb-4">
-                    <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">
-                      Top Matches from {totalRestaurants} Toronto Restaurants
-                    </h3>
-                    <div className="flex gap-2 overflow-x-auto pb-2">
-                        {candidates.map((c) => (
-                            <div key={c.id} className="min-w-[160px] bg-white p-3 rounded-lg border text-xs shadow-sm">
-                                <div className="font-bold truncate text-sm">{c.name}</div>
-                                <div className="text-gray-500 mt-1">{c.cuisine}</div>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <span className="text-yellow-600">{c.rating} ★</span>
-                                  <span className="text-gray-400">•</span>
-                                  <span>{c.price}</span>
-                                </div>
-                                <div className="text-gray-400 text-[10px] mt-1 truncate">{c.location}</div>
-                                <div className="text-green-600 font-mono mt-2 font-semibold">{(c.score * 100).toFixed(0)}% match</div>
-                            </div>
-                        ))}
+          {/* Fairness Metrics */}
+          {fairnessResult && (
+            <FairnessMetricsCard
+              metrics={fairnessResult.metrics}
+              userSatisfaction={fairnessResult.userSatisfaction}
+            />
+          )}
+
+          {/* Retrieval Results */}
+          {candidates.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">
+                Top Matches from {totalRestaurants} Toronto Restaurants
+              </h3>
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {candidates.map((c) => (
+                  <div
+                    key={c.id}
+                    className={cn(
+                      "min-w-[160px] bg-white p-3 rounded-lg border text-xs shadow-sm",
+                      fairnessResult?.restaurantId === c.id && "ring-2 ring-indigo-500"
+                    )}
+                  >
+                    <div className="font-bold truncate text-sm">{c.name}</div>
+                    <div className="text-gray-500 mt-1">{c.cuisine}</div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-yellow-600">{c.rating} ★</span>
+                      <span className="text-gray-400">•</span>
+                      <span>{c.price}</span>
                     </div>
-                </div>
-            )}
-
-            {/* Final Output */}
-            {recommendation && (
-              <div className="bg-white p-6 rounded-xl shadow-md border border-indigo-100">
-                <h3 className="font-bold text-lg mb-2 text-gray-800">Recommendation</h3>
-                <div className="prose prose-sm text-gray-700 whitespace-pre-wrap">
-                  {recommendation}
-                </div>
+                    <div className="text-gray-400 text-[10px] mt-1 truncate">{c.location}</div>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-green-600 font-mono font-semibold">{(c.score * 100).toFixed(0)}% match</span>
+                      {c.fairnessMetrics && (
+                        <span className="text-purple-600 font-mono text-[10px]">
+                          {(c.fairnessMetrics.egalitarian * 100).toFixed(0)}% fair
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
+          )}
+
+          {/* Final Output */}
+          {recommendation && (
+            <div className="bg-white p-6 rounded-xl shadow-md border border-indigo-100">
+              <h3 className="font-bold text-lg mb-2 text-gray-800 flex items-center gap-2">
+                Recommendation
+                {fairnessResult?.isParetoEfficient && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                    Pareto Efficient
+                  </span>
+                )}
+              </h3>
+              <div className="prose prose-sm text-gray-700 whitespace-pre-wrap">
+                {recommendation}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </main>
