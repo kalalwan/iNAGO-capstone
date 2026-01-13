@@ -404,12 +404,27 @@ export function filterParetoEfficient(candidates: ScoredCandidate[]): ScoredCand
 // Final Selection Algorithm
 // ============================================
 
+/**
+ * Select the best restaurant using strict Pareto filtering + Nash Welfare.
+ *
+ * Algorithm:
+ * 1. Filter out any restaurant that violates a hard constraint (satisfaction = 0)
+ * 2. Apply Pareto efficiency filter to remove dominated options
+ * 3. Among Pareto-efficient options, select the one with highest Nash Welfare
+ *
+ * Nash Welfare = (∏ u_i)^(1/n) = geometric mean of user satisfactions
+ *
+ * This approach ensures:
+ * - No dominated options are selected (Pareto efficiency)
+ * - Balanced satisfaction across users (Nash favors equality over pure average)
+ * - A user with 0% satisfaction makes Nash = 0, preventing unfair outcomes
+ */
 export function selectBestRestaurant(
   candidates: ScoredRestaurant[],
   profiles: StructuredUserProfile[],
-  mode: FairnessMode = 'balanced'
+  _mode: FairnessMode = 'balanced' // Mode parameter kept for API compatibility but ignored
 ): FairnessResult {
-  // Calculate fairness for all candidates
+  // Step 1: Calculate fairness metrics for all candidates
   const scored: ScoredCandidate[] = candidates.map(r => {
     const { metrics, userSatisfaction } = calculateGroupFairness(r, profiles);
     return {
@@ -420,42 +435,56 @@ export function selectBestRestaurant(
     };
   });
 
-  // Filter to Pareto-efficient options
-  const paretoEfficient = filterParetoEfficient(scored);
-  const searchSet = paretoEfficient.length > 0 ? paretoEfficient : scored;
+  // Step 2: Filter out restaurants that violate any hard constraint
+  // (These have metrics.nash = 0 because at least one user has score = 0)
+  const feasible = scored.filter(c =>
+    c.userSatisfaction.every(u => u.satisfied)
+  );
 
-  // Select based on fairness mode
-  let selected: ScoredCandidate;
-  switch (mode) {
-    case 'utilitarian':
-      selected = searchSet.reduce((best, curr) =>
-        curr.metrics.utilitarian > best.metrics.utilitarian ? curr : best
-      );
-      break;
-    case 'egalitarian':
-      selected = searchSet.reduce((best, curr) =>
-        curr.metrics.egalitarian > best.metrics.egalitarian ? curr : best
-      );
-      break;
-    case 'balanced':
-    default:
-      // Weighted combination prioritizing egalitarian
-      selected = searchSet.reduce((best, curr) => {
-        const bestScore =
-          0.3 * best.metrics.utilitarian +
-          0.5 * best.metrics.egalitarian +
-          0.2 * (1 - best.metrics.gini);
-        const currScore =
-          0.3 * curr.metrics.utilitarian +
-          0.5 * curr.metrics.egalitarian +
-          0.2 * (1 - curr.metrics.gini);
-        return currScore > bestScore ? curr : best;
-      });
-      break;
+  // If no feasible options, return the best from original set with explanation
+  if (feasible.length === 0) {
+    const best = scored.reduce((a, b) =>
+      a.metrics.utilitarian > b.metrics.utilitarian ? a : b
+    );
+    return {
+      restaurant: best.restaurant,
+      metrics: best.metrics,
+      userSatisfaction: best.userSatisfaction,
+      explanation: generateFairnessExplanation(best, profiles, true),
+      isParetoEfficient: false,
+    };
   }
 
+  // Step 3: Apply strict Pareto efficiency filter
+  const paretoEfficient = filterParetoEfficient(feasible);
+
+  // If Pareto filter returns empty (shouldn't happen), fall back to feasible
+  const searchSet = paretoEfficient.length > 0 ? paretoEfficient : feasible;
+
+  // Step 4: Select by maximum Nash Welfare among Pareto-efficient options
+  // Nash Welfare = geometric mean = (∏ u_i)^(1/n)
+  // This naturally balances efficiency and equity
+  const selected = searchSet.reduce((best, curr) => {
+    // Use Nash welfare as primary criterion
+    if (curr.metrics.nash > best.metrics.nash) {
+      return curr;
+    }
+    // Tie-breaker: if Nash is equal, prefer higher minimum (egalitarian)
+    if (curr.metrics.nash === best.metrics.nash &&
+        curr.metrics.egalitarian > best.metrics.egalitarian) {
+      return curr;
+    }
+    // Second tie-breaker: prefer higher vector similarity score
+    if (curr.metrics.nash === best.metrics.nash &&
+        curr.metrics.egalitarian === best.metrics.egalitarian &&
+        curr.vectorScore > best.vectorScore) {
+      return curr;
+    }
+    return best;
+  });
+
   // Generate explanation
-  const explanation = generateFairnessExplanation(selected, profiles, mode);
+  const explanation = generateFairnessExplanation(selected, profiles, false);
 
   return {
     restaurant: selected.restaurant,
@@ -473,7 +502,7 @@ export function selectBestRestaurant(
 function generateFairnessExplanation(
   selected: ScoredCandidate,
   profiles: StructuredUserProfile[],
-  mode: FairnessMode
+  hasConstraintViolation: boolean
 ): string {
   const { restaurant, metrics, userSatisfaction } = selected;
 
@@ -485,11 +514,13 @@ function generateFairnessExplanation(
   lines.push('');
 
   // Fairness summary
+  const nashWelfare = (metrics.nash * 100).toFixed(0);
   const avgSatisfaction = (metrics.utilitarian * 100).toFixed(0);
   const minSatisfaction = (metrics.egalitarian * 100).toFixed(0);
   const inequality = (metrics.gini * 100).toFixed(0);
 
   lines.push(`**Fairness Scores:**`);
+  lines.push(`- Nash Welfare: ${nashWelfare}% (selection criterion)`);
   lines.push(`- Average satisfaction: ${avgSatisfaction}%`);
   lines.push(`- Minimum satisfaction: ${minSatisfaction}% (no one below this)`);
   lines.push(`- Inequality index: ${inequality}% (lower is better)`);
@@ -504,13 +535,13 @@ function generateFairnessExplanation(
   }
   lines.push('');
 
-  // Mode explanation
-  const modeExplanations: Record<FairnessMode, string> = {
-    utilitarian: 'This selection maximizes total group happiness.',
-    egalitarian: 'This selection ensures no one is left too unhappy.',
-    balanced: 'This selection balances overall happiness with fairness.',
-  };
-  lines.push(modeExplanations[mode]);
+  // Selection explanation
+  if (hasConstraintViolation) {
+    lines.push('**Note:** No restaurant satisfies all hard constraints. Showing best available option.');
+  } else {
+    lines.push('Selected via Pareto filtering + Nash Welfare maximization.');
+    lines.push('This ensures no dominated options and balanced satisfaction across users.');
+  }
 
   return lines.join('\n');
 }

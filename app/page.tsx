@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { USERS } from '@/lib/data';
-import { Message, StructuredUserProfile, GroupFairnessMetrics, UserSatisfactionResult, FairnessMode } from '@/lib/types';
+import { Message, StructuredUserProfile, GroupFairnessMetrics, UserSatisfactionResult } from '@/lib/types';
 import { Send, Sparkles, User, RotateCcw, Trash2, Scale, TrendingUp, Users, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -98,7 +98,6 @@ export default function Home() {
   const [userProfiles, setUserProfiles] = useState<Record<string, StructuredUserProfile>>({});
 
   // Fairness state
-  const [fairnessMode, setFairnessMode] = useState<FairnessMode>('balanced');
   const [fairnessResult, setFairnessResult] = useState<FairnessResultData | null>(null);
 
   // Resizable panel state
@@ -215,7 +214,6 @@ export default function Home() {
           messages,
           preferences,
           userProfiles,
-          fairnessMode
         }),
       });
       const data = await res.json();
@@ -276,31 +274,14 @@ export default function Home() {
     </div>
   );
 
-  // Fairness mode selector
-  const FairnessModeSelector = () => (
-    <div className="flex items-center gap-2 mb-4">
-      <Scale size={16} className="text-gray-500" />
-      <span className="text-xs font-medium text-gray-500">Fairness Mode:</span>
-      <div className="flex gap-1">
-        {(['balanced', 'egalitarian', 'utilitarian'] as FairnessMode[]).map(mode => (
-          <button
-            key={mode}
-            onClick={() => setFairnessMode(mode)}
-            className={cn(
-              "px-2 py-1 text-xs rounded-md transition-colors",
-              fairnessMode === mode
-                ? "bg-indigo-600 text-white"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            )}
-            title={
-              mode === 'balanced' ? 'Balance overall happiness with fairness' :
-              mode === 'egalitarian' ? 'Prioritize the least happy person' :
-              'Maximize total group happiness'
-            }
-          >
-            {mode.charAt(0).toUpperCase() + mode.slice(1)}
-          </button>
-        ))}
+  // Selection method info banner
+  const SelectionMethodBanner = () => (
+    <div className="flex items-center gap-2 mb-4 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+      <Scale size={16} className="text-indigo-600" />
+      <div className="text-xs text-indigo-700">
+        <span className="font-semibold">Selection: </span>
+        Pareto Filtering + Nash Welfare
+        <span className="text-indigo-500 ml-1">(balanced fairness)</span>
       </div>
     </div>
   );
@@ -313,42 +294,49 @@ export default function Home() {
     <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 mb-4">
       <h4 className="font-semibold text-sm text-indigo-800 mb-3 flex items-center gap-2">
         <Scale size={16} />
-        Fairness Analysis
+        Fairness Analysis (Pareto + Nash)
       </h4>
 
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      {/* Nash Welfare - Primary Metric */}
+      <div className="bg-white/80 rounded-lg p-3 mb-3 border border-indigo-200">
+        <div className="text-xs text-indigo-600 font-medium">Nash Welfare (Selection Criterion)</div>
+        <div className="text-2xl font-bold text-indigo-700">
+          {(metrics.nash * 100).toFixed(0)}%
+        </div>
+        <div className="text-[10px] text-gray-500 mt-1">
+          Geometric mean of satisfaction scores
+        </div>
+      </div>
+
+      {/* Secondary Metrics Grid */}
+      <div className="grid grid-cols-3 gap-2 mb-4">
         <div className="bg-white/60 rounded-lg p-2">
-          <div className="text-xs text-gray-500 flex items-center gap-1">
-            <TrendingUp size={12} />
-            Avg Satisfaction
+          <div className="text-[10px] text-gray-500 flex items-center gap-1">
+            <TrendingUp size={10} />
+            Average
           </div>
-          <div className="text-lg font-bold text-indigo-700">
+          <div className="text-sm font-bold text-gray-700">
             {(metrics.utilitarian * 100).toFixed(0)}%
           </div>
         </div>
         <div className="bg-white/60 rounded-lg p-2">
-          <div className="text-xs text-gray-500 flex items-center gap-1">
-            <Users size={12} />
-            Min Satisfaction
+          <div className="text-[10px] text-gray-500 flex items-center gap-1">
+            <Users size={10} />
+            Minimum
           </div>
-          <div className="text-lg font-bold text-purple-700">
+          <div className="text-sm font-bold text-gray-700">
             {(metrics.egalitarian * 100).toFixed(0)}%
           </div>
         </div>
-        <div className="bg-white/60 rounded-lg p-2 col-span-2">
-          <div className="text-xs text-gray-500">Inequality Index (lower is better)</div>
-          <div className="w-full h-2 bg-gray-200 rounded-full mt-1">
-            <div
-              className={cn(
-                "h-full rounded-full",
-                metrics.gini < 0.2 ? "bg-green-500" :
-                metrics.gini < 0.4 ? "bg-yellow-500" : "bg-red-500"
-              )}
-              style={{ width: `${metrics.gini * 100}%` }}
-            />
+        <div className="bg-white/60 rounded-lg p-2">
+          <div className="text-[10px] text-gray-500">Gini</div>
+          <div className={cn(
+            "text-sm font-bold",
+            metrics.gini < 0.2 ? "text-green-600" :
+            metrics.gini < 0.4 ? "text-yellow-600" : "text-red-600"
+          )}>
+            {(metrics.gini * 100).toFixed(0)}%
           </div>
-          <div className="text-xs text-gray-400 mt-1">{(metrics.gini * 100).toFixed(0)}% inequality</div>
         </div>
       </div>
 
@@ -591,8 +579,8 @@ export default function Home() {
 
         <hr className="border-gray-200 my-4" />
 
-        {/* Fairness Mode Selector */}
-        <FairnessModeSelector />
+        {/* Selection Method Banner */}
+        <SelectionMethodBanner />
 
         {/* Action Area */}
         <div className="flex flex-col gap-4">
@@ -646,7 +634,7 @@ export default function Home() {
                       <span className="text-green-600 font-mono font-semibold">{(c.score * 100).toFixed(0)}% match</span>
                       {c.fairnessMetrics && (
                         <span className="text-purple-600 font-mono text-[10px]">
-                          {(c.fairnessMetrics.egalitarian * 100).toFixed(0)}% fair
+                          Nash: {(c.fairnessMetrics.nash * 100).toFixed(0)}%
                         </span>
                       )}
                     </div>

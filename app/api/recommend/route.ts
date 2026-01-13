@@ -10,7 +10,6 @@ import {
 import { getProfileSummary } from '@/lib/profile-utils';
 import {
   StructuredUserProfile,
-  FairnessMode,
   ScoredRestaurant,
   FairnessResult,
 } from '@/lib/types';
@@ -35,7 +34,6 @@ export async function POST(req: Request) {
     preferences,
     messages,
     userProfiles,
-    fairnessMode = 'balanced'
   } = await req.json();
 
   // Convert profiles to StructuredUserProfile format
@@ -132,12 +130,8 @@ export async function POST(req: Request) {
         };
       });
 
-      // Select best using fairness algorithm
-      fairnessResult = selectBestRestaurant(
-        topCandidates,
-        profiles,
-        fairnessMode as FairnessMode
-      );
+      // Select best using Pareto filtering + Nash Welfare
+      fairnessResult = selectBestRestaurant(topCandidates, profiles);
     }
 
     // 7. Build enhanced response with fairness data
@@ -162,7 +156,8 @@ export async function POST(req: Request) {
         User Profiles:
         ${profiles.map(p => `${p.name}: ${getProfileSummary(p)}`).join('\n')}
 
-        Fairness Metrics:
+        Fairness Metrics (Pareto + Nash Welfare):
+        - Nash Welfare: ${(fairnessResult.metrics.nash * 100).toFixed(0)}% (selection criterion)
         - Average satisfaction: ${(fairnessResult.metrics.utilitarian * 100).toFixed(0)}%
         - Minimum satisfaction: ${(fairnessResult.metrics.egalitarian * 100).toFixed(0)}%
         - Inequality: ${(fairnessResult.metrics.gini * 100).toFixed(0)}%
@@ -249,7 +244,7 @@ export async function POST(req: Request) {
         userSatisfaction: fairnessResult.userSatisfaction,
         isParetoEfficient: fairnessResult.isParetoEfficient,
       } : null,
-      mode: fairnessMode,
+      selectionMethod: 'pareto-nash',
     });
 
   } catch (error) {
