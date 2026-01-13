@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { USERS } from '@/lib/data';
 import { Message, StructuredUserProfile, GroupFairnessMetrics, UserSatisfactionResult } from '@/lib/types';
-import { Send, Sparkles, User, RotateCcw, Trash2, Scale, TrendingUp, Users, AlertCircle } from 'lucide-react';
+import { Send, Sparkles, User, RotateCcw, Trash2, Scale, TrendingUp, Users, AlertCircle, ChevronDown, ChevronUp, Code } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const STORAGE_KEY = 'inago-user-profiles-v2';
@@ -99,6 +99,14 @@ export default function Home() {
 
   // Fairness state
   const [fairnessResult, setFairnessResult] = useState<FairnessResultData | null>(null);
+
+  // UI state for expanded profile views
+  const [expandedProfiles, setExpandedProfiles] = useState<Record<string, boolean>>({});
+  const [showRawJson, setShowRawJson] = useState(false);
+
+  const toggleProfileExpanded = (userId: string) => {
+    setExpandedProfiles(prev => ({ ...prev, [userId]: !prev[userId] }));
+  };
 
   // Resizable panel state
   const [leftPanelWidth, setLeftPanelWidth] = useState(50);
@@ -472,83 +480,253 @@ export default function Home() {
         style={{ width: `${100 - leftPanelWidth}%` }}
       >
 
-        {/* Persistent User Profiles */}
+        {/* Persistent User Profiles - Expanded View */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">User Profiles</h2>
-            {Object.keys(userProfiles).length > 0 && (
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">User Profiles (Extracted)</h2>
+            <div className="flex items-center gap-2">
               <button
-                onClick={resetAllProfiles}
-                className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
-                title="Reset all profiles"
+                onClick={() => setShowRawJson(!showRawJson)}
+                className={cn(
+                  "text-xs flex items-center gap-1 px-2 py-1 rounded transition-colors",
+                  showRawJson ? "bg-indigo-100 text-indigo-700" : "text-gray-500 hover:bg-gray-100"
+                )}
+                title="Toggle raw JSON view"
               >
-                <Trash2 size={12} />
-                Clear All
+                <Code size={12} />
+                JSON
               </button>
-            )}
+              {Object.keys(userProfiles).length > 0 && (
+                <button
+                  onClick={resetAllProfiles}
+                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+                  title="Reset all profiles"
+                >
+                  <Trash2 size={12} />
+                  Clear All
+                </button>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+
+          <div className="space-y-3">
             {USERS.map((u) => {
               const profile = getUserProfile(u.id);
+              const isExpanded = expandedProfiles[u.id] || false;
+
               return (
-                <div key={u.id} className={cn("p-3 rounded-lg shadow-sm border", u.color, "bg-opacity-50")}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <User size={14} className="text-gray-500"/>
-                      <span className="font-semibold text-sm">{u.name}</span>
-                    </div>
-                    {profile && (
-                      <button
-                        onClick={() => resetUserProfile(u.id)}
-                        className="text-gray-400 hover:text-red-500 transition-colors"
-                        title={`Reset ${u.name}'s profile`}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                  {profile ? (
-                    <div className="text-xs text-gray-600 space-y-1">
-                      <p className="leading-relaxed">{getProfileSummary(profile)}</p>
-
-                      {/* Dietary tags */}
-                      {profile.dietary.restrictions.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {profile.dietary.restrictions.map(r => (
-                            <span
-                              key={r.type}
-                              className={cn(
-                                "px-1.5 py-0.5 rounded text-[10px]",
-                                r.strictness === 'strict'
-                                  ? "bg-red-100 text-red-700"
-                                  : "bg-green-100 text-green-700"
-                              )}
+                <div key={u.id} className={cn("rounded-lg shadow-sm border overflow-hidden", u.color, "bg-opacity-30")}>
+                  {/* Header - Always visible */}
+                  <div
+                    className={cn("p-3 cursor-pointer hover:bg-white/30 transition-colors", u.color, "bg-opacity-50")}
+                    onClick={() => profile && toggleProfileExpanded(u.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <User size={14} className="text-gray-500"/>
+                        <span className="font-semibold text-sm">{u.name}</span>
+                        {profile && (
+                          <span className="text-[10px] text-gray-400">
+                            (confidence: {(profile.confidence.overall * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {profile && (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); resetUserProfile(u.id); }}
+                              className="text-gray-400 hover:text-red-500 transition-colors"
+                              title={`Reset ${u.name}'s profile`}
                             >
-                              {r.type}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Cuisine tags */}
-                      {profile.cuisinePreferences.favorites.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {profile.cuisinePreferences.favorites.slice(0, 3).map(c => (
-                            <span key={c.cuisine} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px]">
-                              {c.cuisine}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Confidence bar */}
-                      <div className="mt-2">
-                        <span className="text-[10px] text-gray-400">Profile confidence</span>
-                        <ConfidenceBar confidence={profile.confidence.overall} />
+                              <Trash2 size={12} />
+                            </button>
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    <p className="text-xs text-gray-400 italic">No preferences saved yet</p>
+
+                    {/* Summary line */}
+                    {profile ? (
+                      <p className="text-xs text-gray-600 mt-1">{getProfileSummary(profile)}</p>
+                    ) : (
+                      <p className="text-xs text-gray-400 italic mt-1">No preferences extracted yet</p>
+                    )}
+                  </div>
+
+                  {/* Expanded Details */}
+                  {profile && isExpanded && (
+                    <div className="border-t bg-white/50 p-3 space-y-3">
+                      {showRawJson ? (
+                        /* Raw JSON View */
+                        <pre className="text-[10px] bg-gray-900 text-green-400 p-3 rounded-lg overflow-x-auto max-h-64 overflow-y-auto">
+                          {JSON.stringify(profile, null, 2)}
+                        </pre>
+                      ) : (
+                        /* Structured View */
+                        <>
+                          {/* Hard Constraints Section */}
+                          <div>
+                            <div className="text-[10px] font-semibold text-red-700 uppercase mb-1">
+                              Hard Constraints (Must Satisfy)
+                            </div>
+                            {profile.dietary.restrictions.filter(r => r.strictness === 'strict').length > 0 ||
+                             profile.dietary.allergies.length > 0 ||
+                             profile.dietary.religious ? (
+                              <div className="bg-red-50 rounded p-2 space-y-1">
+                                {profile.dietary.restrictions.filter(r => r.strictness === 'strict').map(r => (
+                                  <div key={r.type} className="flex items-center gap-2 text-xs">
+                                    <span className="text-red-600 font-mono">dietary:</span>
+                                    <span className="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-medium">{r.type}</span>
+                                    <span className="text-gray-400 text-[10px]">strictness: strict</span>
+                                  </div>
+                                ))}
+                                {profile.dietary.allergies.map(a => (
+                                  <div key={a} className="flex items-center gap-2 text-xs">
+                                    <span className="text-red-600 font-mono">allergy:</span>
+                                    <span className="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-medium">{a}</span>
+                                  </div>
+                                ))}
+                                {profile.dietary.religious && (
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="text-red-600 font-mono">religious:</span>
+                                    <span className="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-medium">{profile.dietary.religious}</span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-gray-400 italic">None detected</div>
+                            )}
+                          </div>
+
+                          {/* Soft Constraints Section */}
+                          <div>
+                            <div className="text-[10px] font-semibold text-blue-700 uppercase mb-1">
+                              Soft Constraints (Weighted Preferences)
+                            </div>
+                            <div className="bg-blue-50 rounded p-2 space-y-2">
+                              {/* Flexible dietary */}
+                              {profile.dietary.restrictions.filter(r => r.strictness === 'flexible').length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Dietary (flexible):</div>
+                                  {profile.dietary.restrictions.filter(r => r.strictness === 'flexible').map(r => (
+                                    <div key={r.type} className="flex items-center gap-2 text-xs ml-2">
+                                      <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded">{r.type}</span>
+                                      <span className="text-gray-400 text-[10px]">weight: 3</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Cuisine preferences with scores */}
+                              {profile.cuisinePreferences.favorites.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Cuisine Preferences:</div>
+                                  {profile.cuisinePreferences.favorites.map(c => (
+                                    <div key={c.cuisine} className="flex items-center gap-2 text-xs ml-2">
+                                      <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{c.cuisine}</span>
+                                      <span className="text-gray-500 font-mono text-[10px]">
+                                        score: {c.score.toFixed(1)} | freq: {c.frequency} | weight: {Math.ceil(c.score / 2)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Cuisine dislikes */}
+                              {profile.cuisinePreferences.dislikes.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Cuisine Dislikes:</div>
+                                  {profile.cuisinePreferences.dislikes.map(d => (
+                                    <div key={d} className="flex items-center gap-2 text-xs ml-2">
+                                      <span className="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">not-{d}</span>
+                                      <span className="text-gray-400 text-[10px]">weight: 3</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Budget */}
+                              {profile.budget.preferred && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Budget:</div>
+                                  <div className="flex items-center gap-2 text-xs ml-2">
+                                    <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">{profile.budget.preferred}</span>
+                                    <span className="text-gray-500 font-mono text-[10px]">
+                                      flexibility: {profile.budget.flexibility}/5 | weight: {6 - profile.budget.flexibility}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Location */}
+                              {profile.location.preferredAreas.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Location:</div>
+                                  {profile.location.preferredAreas.map(loc => (
+                                    <div key={loc} className="flex items-center gap-2 text-xs ml-2">
+                                      <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">{loc}</span>
+                                      <span className="text-gray-400 text-[10px]">weight: 2</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Ambiance */}
+                              {profile.diningStyle.preferredAmbiance.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-gray-500">Ambiance:</div>
+                                  {profile.diningStyle.preferredAmbiance.map(amb => (
+                                    <div key={amb} className="flex items-center gap-2 text-xs ml-2">
+                                      <span className="bg-pink-100 text-pink-700 px-1.5 py-0.5 rounded">{amb}</span>
+                                      <span className="text-gray-400 text-[10px]">weight: 1</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Show if nothing extracted */}
+                              {profile.dietary.restrictions.filter(r => r.strictness === 'flexible').length === 0 &&
+                               profile.cuisinePreferences.favorites.length === 0 &&
+                               profile.cuisinePreferences.dislikes.length === 0 &&
+                               !profile.budget.preferred &&
+                               profile.location.preferredAreas.length === 0 &&
+                               profile.diningStyle.preferredAmbiance.length === 0 && (
+                                <div className="text-[10px] text-gray-400 italic">No soft preferences extracted yet</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Confidence Scores */}
+                          <div>
+                            <div className="text-[10px] font-semibold text-gray-600 uppercase mb-1">
+                              Confidence Scores
+                            </div>
+                            <div className="grid grid-cols-5 gap-1">
+                              {Object.entries(profile.confidence).map(([key, value]) => (
+                                <div key={key} className="bg-gray-100 rounded p-1.5 text-center">
+                                  <div className="text-[9px] text-gray-500 capitalize">{key}</div>
+                                  <div className={cn(
+                                    "text-xs font-bold",
+                                    value > 0.7 ? "text-green-600" :
+                                    value > 0.4 ? "text-yellow-600" : "text-gray-400"
+                                  )}>
+                                    {(value * 100).toFixed(0)}%
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Metadata */}
+                          <div className="text-[10px] text-gray-400 border-t pt-2">
+                            Last updated: {new Date(profile.history.lastUpdated).toLocaleString()} |
+                            Interactions: {profile.history.totalInteractions}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               );
