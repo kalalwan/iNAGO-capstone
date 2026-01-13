@@ -311,13 +311,21 @@ function calculateGroupFairness(restaurant, profiles): GroupFairnessMetrics {
 }
 ```
 
-### Fairness Modes
+### Selection Method: Nash Welfare
 
-| Mode | Formula | Philosophy |
-|------|---------|------------|
-| **Utilitarian** | max(average) | Greatest good for greatest number |
-| **Egalitarian** | max(minimum) | No one should be too unhappy (Rawlsian) |
-| **Balanced** | 0.3×avg + 0.5×min + 0.2×(1-gini) | Hybrid approach (default) |
+The system uses **Nash Welfare** as the sole selection criterion among Pareto-efficient options:
+
+| Metric | Formula | Purpose |
+|--------|---------|---------|
+| **Nash Welfare** | (∏ uᵢ)^(1/n) | Selection criterion - geometric mean of satisfaction scores |
+| Utilitarian | Σuᵢ / n | Displayed for reference - average satisfaction |
+| Egalitarian | min(uᵢ) | Tie-breaker - minimum satisfaction |
+| Gini | inequality coefficient | Displayed for reference - inequality measure |
+
+**Why Nash Welfare?**
+- If any user has 0% satisfaction → Nash = 0 (prevents unfair outcomes)
+- Naturally balances efficiency and equity without tuning weights
+- Scale-invariant and Pareto-efficient by construction
 
 ---
 
@@ -403,7 +411,7 @@ function filterParetoEfficient(candidates): ScoredCandidate[] {
     userSatisfaction: UserSatisfactionResult[],
     isParetoEfficient: boolean
   },
-  mode: "balanced" | "egalitarian" | "utilitarian"
+  selectionMethod: "pareto-nash"  // Pareto filtering + Nash Welfare
 }
 ```
 
@@ -431,7 +439,7 @@ function filterParetoEfficient(candidates): ScoredCandidate[] {
    → Profile updated
 
 6. USER ACTION
-   Clicks "Generate Fair Recommendation" with mode="balanced"
+   Clicks "Generate Fair Recommendation"
 
 7. VECTOR SEARCH
    → Query: "vegan thai bbq moderate price"
@@ -449,11 +457,12 @@ function filterParetoEfficient(candidates): ScoredCandidate[] {
    → Removes dominated options
    → 15 → 8 Pareto-efficient candidates
 
-10. SELECTION (Balanced mode)
-    → Score = 0.3×utilitarian + 0.5×egalitarian + 0.2×(1-gini)
+10. SELECTION (Nash Welfare)
+    → Among Pareto-efficient: select max Nash Welfare
+    → Nash = (∏ uᵢ)^(1/n) = geometric mean
     → Best: Khao San Road (vegan Thai options, budget-friendly)
       - Aisha: 85%, John: 45%, Josh: 70%, Kate: 60%
-      - Gini: 0.18 (low inequality)
+      - Nash: 63%
 
 11. LLM EXPLANATION
     → GPT-4 receives fairness data

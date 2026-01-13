@@ -289,7 +289,6 @@ export default function Home() {
       <div className="text-xs text-indigo-700">
         <span className="font-semibold">Selection: </span>
         Pareto Filtering + Nash Welfare
-        <span className="text-indigo-500 ml-1">(balanced fairness)</span>
       </div>
     </div>
   );

@@ -540,7 +540,7 @@ function generateFairnessExplanation(
     lines.push('**Note:** No restaurant satisfies all hard constraints. Showing best available option.');
   } else {
     lines.push('Selected via Pareto filtering + Nash Welfare maximization.');
-    lines.push('This ensures no dominated options and balanced satisfaction across users.');
+    lines.push('Nash Welfare = geometric mean of satisfaction scores.');
   }
 
   return lines.join('\n');

@@ -188,6 +188,7 @@ export interface GroupFairnessMetrics {
   gini: number;         // Inequality measure (0 = equal, 1 = unequal)
 }
 
+// Legacy type kept for API compatibility - system now uses pure Nash Welfare
 export type FairnessMode = 'utilitarian' | 'egalitarian' | 'balanced';
 
 export interface FairnessResult {
