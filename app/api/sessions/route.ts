@@ -12,6 +12,7 @@ import {
   SessionMessage,
   SessionSettings,
   StructuredUserProfile,
+  Vote,
 } from '@/lib/types';
 import { createEmptyProfile } from '@/lib/fairness';
 
@@ -127,6 +128,7 @@ export async function POST(req: NextRequest) {
         users: [host],
         messages: [],
         recommendations: null,
+        votes: [],
         settings,
       };
 
@@ -206,6 +208,39 @@ export async function POST(req: NextRequest) {
       }
 
       return NextResponse.json({ message });
+    }
+
+    // ---- VOTE ----
+    case 'vote': {
+      const { sessionId: voteSid, userId: voteUid, restaurantId, vote: voteDir } = body as {
+        sessionId: string; userId: string; restaurantId: string; vote: 'up' | 'down'; action: string;
+      };
+      const session = sessions.get(voteSid);
+      if (!session) {
+        return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+      }
+      if (!session.users.find(u => u.id === voteUid)) {
+        return NextResponse.json({ error: 'User not found in session' }, { status: 404 });
+      }
+
+      // Initialize votes array for older sessions
+      if (!session.votes) {
+        session.votes = [];
+      }
+
+      // Upsert: remove existing vote by this user on this restaurant, then add new one
+      session.votes = session.votes.filter(
+        v => !(v.userId === voteUid && v.restaurantId === restaurantId)
+      );
+      const newVote: Vote = {
+        restaurantId,
+        userId: voteUid,
+        vote: voteDir,
+        timestamp: Date.now(),
+      };
+      session.votes.push(newVote);
+
+      return NextResponse.json({ vote: newVote, votes: session.votes });
     }
 
     // ---- ADD SYSTEM MESSAGE ----

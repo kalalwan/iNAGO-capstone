@@ -7,12 +7,14 @@ import {
   StructuredUserProfile,
   GroupFairnessMetrics,
   UserSatisfactionResult,
+  Vote,
 } from '@/lib/types';
 import {
   updateSession,
   addMessage as storeAddMessage,
   addSystemMessage,
   getSession,
+  submitVote,
 } from '@/lib/session-store';
 import UserProfileCard from './UserProfileCard';
 import FairnessMetricsCard from './FairnessMetricsCard';
@@ -79,6 +81,7 @@ export default function ChatSession({ session: initialSession, currentUserId, on
   const [showRawJson, setShowRawJson] = useState(false);
   const [copied, setCopied] = useState(false);
   const [inCarMode, setInCarMode] = useState(false);
+  const [votes, setVotes] = useState<Vote[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Conversation engine state
@@ -131,6 +134,9 @@ export default function ChatSession({ session: initialSession, currentUserId, on
       const refreshed = await getSession(session.id);
       if (refreshed) {
         setSession(refreshed);
+        if (refreshed.votes) {
+          setVotes(refreshed.votes);
+        }
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -351,6 +357,13 @@ export default function ChatSession({ session: initialSession, currentUserId, on
       await addSystemMessage(session.id, questions[0].question);
       const refreshed = await getSession(session.id);
       if (refreshed) setSession(refreshed);
+    }
+  };
+
+  const handleVote = async (restaurantId: string, vote: 'up' | 'down') => {
+    const result = await submitVote(session.id, currentUserId, restaurantId, vote);
+    if (result) {
+      setVotes(result.votes);
     }
   };
 
@@ -643,6 +656,9 @@ export default function ChatSession({ session: initialSession, currentUserId, on
             recommendation={recommendation || ''}
             totalRestaurants={totalRestaurants}
             fairnessResult={fairnessResult}
+            votes={votes}
+            currentUserId={currentUserId}
+            onVote={handleVote}
           />
         </div>
       </div>

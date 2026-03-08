@@ -10,6 +10,7 @@ import {
   Session,
   SessionMessage,
   StructuredUserProfile,
+  Vote,
 } from './types';
 
 const API_BASE = '/api/sessions';
@@ -109,6 +110,29 @@ export async function addSystemMessage(
     if (!res.ok) return null;
     const data = await res.json();
     return data.message;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================
+// Voting
+// ============================================
+
+export async function submitVote(
+  sessionId: string,
+  userId: string,
+  restaurantId: string,
+  vote: 'up' | 'down'
+): Promise<{ vote: Vote; votes: Vote[] } | null> {
+  try {
+    const res = await fetch(API_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'vote', sessionId, userId, restaurantId, vote }),
+    });
+    if (!res.ok) return null;
+    return res.json();
   } catch {
     return null;
   }

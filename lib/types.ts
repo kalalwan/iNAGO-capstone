@@ -215,6 +215,17 @@ export interface ExtractedPreferences {
 }
 
 // ============================================
+// Voting Types
+// ============================================
+
+export interface Vote {
+  restaurantId: string;
+  userId: string;
+  vote: 'up' | 'down';
+  timestamp: number;
+}
+
+// ============================================
 // Session Types
 // ============================================
 
@@ -226,6 +237,7 @@ export interface Session {
   users: SessionUser[];                // participants
   messages: SessionMessage[];          // all chat messages
   recommendations: RecommendationResult | null;
+  votes: Vote[];
   settings: SessionSettings;
 }
 
