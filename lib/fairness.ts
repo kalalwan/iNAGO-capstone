@@ -3,6 +3,12 @@
  *
  * Implements constraint classification, per-user satisfaction scoring,
  * group fairness metrics, and Pareto efficiency filtering.
+ *
+ * MIE451 Concepts:
+ *   - Content-Based Filtering via feature vectors (Module 5.2)
+ *   - IDF-weighted scoring for rare constraint amplification (Module 1.10)
+ *   - Nash Welfare for group fairness (Module 9)
+ *   - Cold-start handling for low-confidence users (Module 5.4)
  */
 
 import {
@@ -17,6 +23,17 @@ import {
   FairnessResult,
   ScoredRestaurant,
 } from './types';
+import { InvertedIndex } from './retrieval/inverted-index';
+import {
+  buildUserFeatureVector,
+  buildRestaurantFeatureVector,
+  scoreUserRestaurant,
+} from './scoring/feature-vectors';
+import {
+  isColdStartUser,
+  calculateColdStartSatisfaction,
+  calculateRobustNashWelfare,
+} from './scoring/cold-start';
 
 // ============================================
 // Constraint Extraction from Profile
@@ -259,9 +276,29 @@ function restaurantHasBonus(restaurant: Restaurant, bonus: { type: string; value
 // User Satisfaction Calculation
 // ============================================
 
+/**
+ * Calculate user satisfaction for a restaurant.
+ *
+ * MIE451 Hybrid Scoring Strategy:
+ *   When an inverted index is available, we blend two signals:
+ *     1. Feature vector cosine similarity (CBF, Module 5.2)
+ *     2. Manual soft-match scoring (constraint-based)
+ *
+ *   Blend formula:
+ *     blendedScore = α × vectorScore + (1 − α) × manualScore
+ *     where α = user's overall confidence (0-1)
+ *
+ *   Rationale: high-confidence users have well-estimated feature vectors,
+ *   so we trust the vector score more. Low-confidence users fall back
+ *   to the simpler constraint-matching approach.
+ *
+ * Cold-start users (confidence < 0.3) get popularity-based scoring
+ * via the cold-start module instead.
+ */
 export function calculateUserSatisfaction(
   restaurant: Restaurant,
-  profile: StructuredUserProfile
+  profile: StructuredUserProfile,
+  index?: InvertedIndex
 ): UserSatisfactionResult {
   const constraints = extractConstraints(profile);
 
@@ -283,7 +320,23 @@ export function calculateUserSatisfaction(
     }
   }
 
-  // Step 2: Calculate soft constraint scores
+  // Step 2: Cold-start check — use popularity-based scoring
+  if (isColdStartUser(profile)) {
+    const coldScore = calculateColdStartSatisfaction(restaurant, profile);
+    return {
+      userId: profile.id,
+      userName: profile.name,
+      score: coldScore,
+      satisfied: true,
+      breakdown: {
+        hardConstraintsMet: true,
+        softScores: { 'cold-start:popularity': coldScore },
+        bonusScore: 0,
+      },
+    };
+  }
+
+  // Step 3: Calculate manual soft constraint scores (always computed)
   let softScore = 0;
   let maxSoftScore = 0;
   const softScores: Record<string, number> = {};
@@ -296,7 +349,7 @@ export function calculateUserSatisfaction(
     softScores[`${softConstraint.type}:${softConstraint.value}`] = match;
   }
 
-  // Step 3: Calculate bonus points
+  // Step 4: Calculate bonus points
   let bonusScore = 0;
   for (const bonus of constraints.bonus) {
     if (restaurantHasBonus(restaurant, bonus)) {
@@ -304,9 +357,25 @@ export function calculateUserSatisfaction(
     }
   }
 
-  // Final score: normalized to 0-1
-  const baseScore = maxSoftScore > 0 ? softScore / maxSoftScore : 0.5;
-  const finalScore = Math.min(1, baseScore * 0.9 + bonusScore + 0.1); // Base 0.1 for passing hard constraints
+  // Step 5: Compute final score
+  const manualBase = maxSoftScore > 0 ? softScore / maxSoftScore : 0.5;
+  const manualScore = Math.min(1, manualBase * 0.9 + bonusScore + 0.1);
+
+  let finalScore: number;
+
+  if (index) {
+    // Feature vector scoring (CBF)
+    const userVec = buildUserFeatureVector(profile, index);
+    const restVec = buildRestaurantFeatureVector(restaurant, index);
+    const vectorScore = scoreUserRestaurant(userVec, restVec);
+    softScores['cbf:vectorSimilarity'] = vectorScore;
+
+    // Blend: α = confidence, higher confidence → trust vectors more
+    const alpha = profile.confidence.overall;
+    finalScore = alpha * vectorScore + (1 - alpha) * manualScore;
+  } else {
+    finalScore = manualScore;
+  }
 
   return {
     userId: profile.id,
@@ -325,11 +394,20 @@ export function calculateUserSatisfaction(
 // Group Fairness Metrics
 // ============================================
 
+/**
+ * Calculate group fairness metrics for a restaurant across all user profiles.
+ *
+ * MIE451 Enhancements:
+ *   - Feature vector scoring when index is available (Module 5.2)
+ *   - Cold-start-aware robust Nash welfare (Module 5.4)
+ *   - Standard utilitarian, egalitarian, Nash, and Gini metrics
+ */
 export function calculateGroupFairness(
   restaurant: Restaurant,
-  profiles: StructuredUserProfile[]
+  profiles: StructuredUserProfile[],
+  index?: InvertedIndex
 ): { metrics: GroupFairnessMetrics; userSatisfaction: UserSatisfactionResult[] } {
-  const userSatisfaction = profiles.map(p => calculateUserSatisfaction(restaurant, p));
+  const userSatisfaction = profiles.map(p => calculateUserSatisfaction(restaurant, p, index));
   const scores = userSatisfaction.map(u => u.score);
 
   // Check if any hard constraints failed
@@ -349,7 +427,6 @@ export function calculateGroupFairness(
   const n = scores.length;
   const sum = scores.reduce((a, b) => a + b, 0);
   const min = Math.min(...scores);
-  const product = scores.reduce((a, b) => a * b, 1);
 
   // Gini coefficient calculation
   let giniNumerator = 0;
@@ -360,11 +437,19 @@ export function calculateGroupFairness(
   }
   const gini = sum > 0 ? giniNumerator / (2 * n * sum) : 0;
 
+  // Nash welfare: use robust version that handles cold-start users
+  const satisfactionEntries = profiles.map((p, i) => ({
+    userId: p.id,
+    score: scores[i],
+    isCold: isColdStartUser(p),
+  }));
+  const nashWelfare = calculateRobustNashWelfare(satisfactionEntries);
+
   return {
     metrics: {
       utilitarian: sum / n,
       egalitarian: min,
-      nash: Math.pow(product, 1 / n),
+      nash: nashWelfare,
       gini,
     },
     userSatisfaction,
@@ -422,11 +507,12 @@ export function filterParetoEfficient(candidates: ScoredCandidate[]): ScoredCand
 export function selectBestRestaurant(
   candidates: ScoredRestaurant[],
   profiles: StructuredUserProfile[],
-  _mode: FairnessMode = 'balanced' // Mode parameter kept for API compatibility but ignored
+  _mode: FairnessMode = 'balanced', // Mode parameter kept for API compatibility but ignored
+  index?: InvertedIndex
 ): FairnessResult {
   // Step 1: Calculate fairness metrics for all candidates
   const scored: ScoredCandidate[] = candidates.map(r => {
-    const { metrics, userSatisfaction } = calculateGroupFairness(r, profiles);
+    const { metrics, userSatisfaction } = calculateGroupFairness(r, profiles, index);
     return {
       restaurant: r,
       metrics,

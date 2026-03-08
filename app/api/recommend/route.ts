@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { RESTAURANTS } from '@/lib/data';
-import { cosineSimilarity } from '@/lib/utils';
 import {
   selectBestRestaurant,
   calculateGroupFairness,
@@ -13,6 +12,11 @@ import {
   ScoredRestaurant,
   FairnessResult,
 } from '@/lib/types';
+import {
+  hybridRetrieve,
+  DEFAULT_CONFIG,
+} from '@/lib/retrieval/hybrid-retrieval';
+import { getPopularityBaseline } from '@/lib/baselines/popularity-baseline';
 
 // Haversine distance calculation (km)
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -30,17 +34,6 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 // Cache for restaurant embeddings (persists across requests in serverless)
 let restaurantEmbeddingsCache: { id: string; embedding: number[] }[] | null = null;
 
-// Try to load pre-computed embeddings
-async function loadPrecomputedEmbeddings(): Promise<{ id: string; embedding: number[] }[] | null> {
-  try {
-    // In production, embeddings would be loaded from a file or database
-    // For now, we'll compute them on first request and cache
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(req: Request) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const {
@@ -53,7 +46,7 @@ export async function POST(req: Request) {
   // Convert profiles to StructuredUserProfile format
   const profiles: StructuredUserProfile[] = [];
   if (userProfiles && typeof userProfiles === 'object') {
-    for (const [userId, profile] of Object.entries(userProfiles)) {
+    for (const [, profile] of Object.entries(userProfiles)) {
       if (profile && typeof profile === 'object' && 'name' in (profile as object)) {
         profiles.push(profile as StructuredUserProfile);
       }
@@ -68,7 +61,6 @@ export async function POST(req: Request) {
         userName,
         'bg-gray-100 border-gray-300'
       );
-      // Add any dietary info we can extract from preference string
       if (typeof pref === 'string' && pref.toLowerCase().includes('vegan')) {
         profile.dietary.restrictions.push({ type: 'vegan', strictness: 'strict' });
       }
@@ -76,80 +68,89 @@ export async function POST(req: Request) {
     }
   }
 
-  // 1. Synthesize a "Group Query" from profiles
+  // 1. Synthesize a "Group Query" for embedding-based dense retrieval
   const profileSummaries = profiles.map(p => getProfileSummary(p)).join(' ');
   const currentPrefs = Object.values(preferences || {}).join(' ');
   const groupQuery = `${currentPrefs} ${profileSummaries}`.trim() || 'good restaurant toronto';
 
   try {
-    // 2. Embed the Group Query
-    const queryEmbeddingResponse = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: groupQuery,
-    });
-    const queryVector = queryEmbeddingResponse.data[0].embedding;
+    // 2. Get embeddings for the hybrid pipeline's dense stage
+    let embeddingData: {
+      queryVector: number[];
+      restaurantEmbeddings: { id: string; embedding: number[] }[];
+    } | undefined;
 
-    // 3. Get or compute restaurant embeddings
-    if (!restaurantEmbeddingsCache) {
-      // Try loading pre-computed
-      restaurantEmbeddingsCache = await loadPrecomputedEmbeddings();
+    try {
+      const queryEmbeddingResponse = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: groupQuery,
+      });
+      const queryVector = queryEmbeddingResponse.data[0].embedding;
 
+      // Get or compute restaurant embeddings
       if (!restaurantEmbeddingsCache) {
-        console.log('Computing embeddings for', RESTAURANTS.length, 'restaurants...');
-
+        console.log('[Recommend] Computing embeddings for', RESTAURANTS.length, 'restaurants...');
         const restaurantTexts = RESTAURANTS.map(rest =>
           `${rest.name} ${rest.cuisine} ${rest.description} ${rest.price} ${rest.location} ${rest.tags.join(' ')}`
         );
-
         const batchEmbeddingResponse = await openai.embeddings.create({
           model: "text-embedding-3-small",
           input: restaurantTexts,
         });
-
         restaurantEmbeddingsCache = RESTAURANTS.map((rest, idx) => ({
           id: rest.id,
           embedding: batchEmbeddingResponse.data[idx].embedding,
         }));
-
-        console.log('Embeddings cached for', restaurantEmbeddingsCache.length, 'restaurants');
+        console.log('[Recommend] Embeddings cached for', restaurantEmbeddingsCache.length, 'restaurants');
       }
+
+      embeddingData = {
+        queryVector,
+        restaurantEmbeddings: restaurantEmbeddingsCache,
+      };
+    } catch (embError) {
+      // Embedding API failed — hybrid pipeline will fall back to feature vectors
+      console.warn('[Recommend] Embedding API unavailable, using feature-vector-only mode:', embError);
     }
 
-    // 4. Score all restaurants using cosine similarity + optional distance
-    const scoredRestaurants: ScoredRestaurant[] = RESTAURANTS.map((rest, idx) => {
-      const embedding = restaurantEmbeddingsCache![idx].embedding;
-      let score = cosineSimilarity(queryVector, embedding);
+    // 3. Run hybrid retrieval pipeline (sparse + dense + RRF)
+    const hybridResult = hybridRetrieve(
+      RESTAURANTS,
+      profiles,
+      DEFAULT_CONFIG,
+      embeddingData
+    );
 
-      // If user location is provided, add a small distance bonus for closer restaurants
-      if (userLocation && rest.lat && rest.lon) {
-        const distance = haversineDistance(
-          userLocation.lat, userLocation.lon,
-          rest.lat, rest.lon
-        );
-        // Closer restaurants get a slight bonus (up to +0.05 for very close, 0 for >20km)
-        const distanceBonus = Math.max(0, 0.05 * (1 - distance / 20));
-        score += distanceBonus;
-      }
+    let topCandidates = hybridResult.candidates;
+    const index = hybridResult.index;
 
-      return {
-        ...rest,
-        score,
-      };
-    });
+    console.log('[Recommend] Hybrid retrieval:', JSON.stringify(hybridResult.diagnostics));
 
-    // 5. Retrieve Top Candidates (expanded pool for fairness filtering)
-    const topCandidates = scoredRestaurants
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 15); // Get more candidates for fairness analysis
+    // 4. Apply distance bonus if user location provided
+    if (userLocation) {
+      topCandidates = topCandidates.map(r => {
+        if (r.lat && r.lon) {
+          const distance = haversineDistance(
+            userLocation.lat, userLocation.lon,
+            r.lat, r.lon
+          );
+          const distanceBonus = Math.max(0, 0.05 * (1 - distance / 20));
+          return { ...r, score: r.score + distanceBonus };
+        }
+        return r;
+      });
+      // Re-sort after distance adjustment
+      topCandidates.sort((a, b) => b.score - a.score);
+    }
 
-    // 6. Apply Mathematical Fairness Scoring
+    // 5. Apply mathematical fairness scoring (now with index for CBF + cold-start)
     let fairnessResult: FairnessResult | null = null;
     let candidatesWithFairness: ScoredRestaurant[] = topCandidates;
 
     if (profiles.length > 0) {
-      // Calculate fairness for all candidates
+      // Calculate fairness for all candidates (with inverted index for feature vectors)
       candidatesWithFairness = topCandidates.map(restaurant => {
-        const { metrics, userSatisfaction } = calculateGroupFairness(restaurant, profiles);
+        const { metrics, userSatisfaction } = calculateGroupFairness(restaurant, profiles, index);
         return {
           ...restaurant,
           fairnessMetrics: metrics,
@@ -157,21 +158,23 @@ export async function POST(req: Request) {
         };
       });
 
-      // Select best using Pareto filtering + Nash Welfare
-      fairnessResult = selectBestRestaurant(topCandidates, profiles);
+      // Select best using Pareto filtering + robust Nash Welfare
+      fairnessResult = selectBestRestaurant(topCandidates, profiles, 'balanced', index);
     }
 
-    // 7. Build enhanced response with fairness data
+    // 6. Compute popularity baseline for comparison
+    const popularityBaseline = getPopularityBaseline(RESTAURANTS, profiles, 3);
+
+    // 7. Build display candidates
     const topForDisplay = candidatesWithFairness.slice(0, 6);
 
-    // 8. Generate LLM explanation (optional enhancement)
+    // 8. Generate LLM explanation
     const conversationText = messages.map((m: { userName: string; text: string }) =>
       `${m.userName}: ${m.text}`
     ).join('\n');
 
     let llmExplanation = '';
     if (fairnessResult) {
-      // Use shorter prompt when we have fairness data
       const reasoningPrompt = `
         You are a Group Dining Recommender for Toronto.
 
@@ -205,11 +208,9 @@ export async function POST(req: Request) {
         llmExplanation = finalRecResponse.choices[0].message.content || '';
       } catch (error) {
         console.error('LLM explanation error:', error);
-        // Fall back to generated explanation
         llmExplanation = fairnessResult.explanation;
       }
     } else {
-      // No profiles - use original LLM approach
       const reasoningPrompt = `
         You are a Group Dining Recommender for Toronto restaurants.
 
@@ -244,7 +245,6 @@ export async function POST(req: Request) {
       llmExplanation = finalRecResponse.choices[0].message.content || '';
     }
 
-    // Combine fairness explanation with LLM explanation
     const fullRecommendation = fairnessResult
       ? `${fairnessResult.explanation}\n\n---\n\n${llmExplanation}`
       : llmExplanation;
@@ -274,20 +274,51 @@ export async function POST(req: Request) {
         userSatisfaction: fairnessResult.userSatisfaction,
         isParetoEfficient: fairnessResult.isParetoEfficient,
       } : null,
-      selectionMethod: 'pareto-nash',
+      selectionMethod: 'hybrid-pareto-nash',
+      // Baseline comparison data for evaluation
+      baselineComparison: {
+        popularityTop3: popularityBaseline.map(r => ({
+          id: r.id,
+          name: r.name,
+          score: r.score,
+        })),
+      },
+      retrievalDiagnostics: hybridResult.diagnostics,
     });
 
   } catch (error) {
     console.error('Recommendation error:', error);
 
-    // If OpenAI API fails, return a graceful error with any available data
-    return NextResponse.json({
-      error: "Recommendation failed — please try again",
-      candidates: [],
-      recommendation: "Unable to generate a recommendation right now. Please try again in a moment.",
-      totalRestaurants: RESTAURANTS.length,
-      fairnessResult: null,
-      selectionMethod: 'error-fallback',
-    }, { status: 200 }); // Return 200 so the UI handles it gracefully
+    // If everything fails, try feature-vector-only fallback (no API needed)
+    try {
+      const fallbackResult = hybridRetrieve(RESTAURANTS, profiles);
+      const fallbackCandidates = fallbackResult.candidates.slice(0, 4);
+
+      return NextResponse.json({
+        candidates: fallbackCandidates.map(r => ({
+          id: r.id,
+          name: r.name,
+          cuisine: r.cuisine,
+          price: r.price,
+          rating: r.rating,
+          location: r.location,
+          address: r.address,
+          score: r.score,
+        })),
+        recommendation: `Based on your group's preferences, we recommend **${fallbackCandidates[0]?.name || 'a restaurant'}**. (Generated offline — embedding API was unavailable.)`,
+        totalRestaurants: RESTAURANTS.length,
+        fairnessResult: null,
+        selectionMethod: 'hybrid-fallback',
+      });
+    } catch {
+      return NextResponse.json({
+        error: "Recommendation failed — please try again",
+        candidates: [],
+        recommendation: "Unable to generate a recommendation right now. Please try again in a moment.",
+        totalRestaurants: RESTAURANTS.length,
+        fairnessResult: null,
+        selectionMethod: 'error-fallback',
+      }, { status: 200 });
+    }
   }
 }

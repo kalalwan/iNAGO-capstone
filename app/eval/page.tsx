@@ -7,9 +7,14 @@ import { selectBestRestaurant } from '@/lib/fairness';
 import {
   StructuredUserProfile,
   FairnessResult,
-  ScoredRestaurant,
 } from '@/lib/types';
-import { Scale, CheckCircle, XCircle, AlertTriangle, ArrowLeft, Play, BarChart3 } from 'lucide-react';
+import { hybridRetrieve } from '@/lib/retrieval/hybrid-retrieval';
+import {
+  calculateEvalMetrics,
+  EvalMetricsSummary,
+  BaselineComparison,
+} from '@/lib/eval/metrics';
+import { Scale, CheckCircle, XCircle, AlertTriangle, ArrowLeft, Play, BarChart3, TrendingUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -20,6 +25,12 @@ interface ScenarioResult {
   hardConstraintViolations: number;
   passed: boolean;
   error?: string;
+  evalMetrics?: EvalMetricsSummary;
+  retrievalDiagnostics?: {
+    sparseCount: number;
+    denseCount: number;
+    overlapCount: number;
+  };
 }
 
 export default function EvalPage() {
@@ -38,14 +49,13 @@ export default function EvalPage() {
         // Build profiles from scenario
         const profiles = scenario.users.map((u, i) => buildProfileFromEvalUser(u, i));
 
-        // Score all restaurants for this group
-        const scored: ScoredRestaurant[] = RESTAURANTS.map(r => ({
-          ...r,
-          score: 0.5, // Base score — no embedding in eval
-        }));
+        // Run hybrid retrieval pipeline (no embeddings in eval — uses feature vectors only)
+        const hybridResult = hybridRetrieve(RESTAURANTS, profiles);
+        const candidates = hybridResult.candidates;
+        const index = hybridResult.index;
 
-        // Run fairness analysis
-        const fairnessResult = selectBestRestaurant(scored, profiles);
+        // Run fairness analysis with inverted index for CBF + cold-start
+        const fairnessResult = selectBestRestaurant(candidates, profiles, 'balanced', index);
 
         // Count hard constraint violations
         let hardViolations = 0;
@@ -55,9 +65,10 @@ export default function EvalPage() {
           }
         }
 
-        // Pass criteria:
-        // 1. No hard constraint violations (or no feasible option found, which is acceptable)
-        // 2. Nash welfare > 0 (unless constraints conflict)
+        // Calculate IR evaluation metrics
+        const evalMetrics = calculateEvalMetrics(candidates, RESTAURANTS, profiles, index);
+
+        // Pass criteria
         const allHardMet = hardViolations === 0;
         const nashAboveZero = fairnessResult.metrics.nash > 0;
         const passed = allHardMet && (nashAboveZero || profiles.length <= 1);
@@ -68,6 +79,12 @@ export default function EvalPage() {
           fairnessResult,
           hardConstraintViolations: hardViolations,
           passed,
+          evalMetrics,
+          retrievalDiagnostics: {
+            sparseCount: hybridResult.diagnostics.sparseCount,
+            denseCount: hybridResult.diagnostics.denseCount,
+            overlapCount: hybridResult.diagnostics.overlapCount,
+          },
         });
       } catch (e) {
         newResults.push({
@@ -97,6 +114,17 @@ export default function EvalPage() {
     ? results.reduce((sum, r) => sum + (r.fairnessResult?.metrics.egalitarian || 0), 0) / results.length
     : 0;
 
+  // IR metrics averages
+  const avgP3 = results.length > 0
+    ? results.reduce((sum, r) => sum + (r.evalMetrics?.precisionAt3 || 0), 0) / results.length
+    : 0;
+  const avgNDCG5 = results.length > 0
+    ? results.reduce((sum, r) => sum + (r.evalMetrics?.ndcgAt5 || 0), 0) / results.length
+    : 0;
+  const avgNashLift = results.length > 0
+    ? results.reduce((sum, r) => sum + (r.evalMetrics?.nashLiftOverPopularity || 0), 0) / results.length
+    : 0;
+
   return (
     <main className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-6xl mx-auto">
@@ -110,7 +138,7 @@ export default function EvalPage() {
               <h1 className="text-3xl font-bold text-gray-800">Evaluation Dashboard</h1>
             </div>
             <p className="text-gray-500 ml-8">
-              Synthetic scenario testing for the iNAGO Eats fairness system
+              Hybrid retrieval + fairness evaluation with MIE451 IR metrics
             </p>
           </div>
           <button
@@ -125,48 +153,79 @@ export default function EvalPage() {
 
         {/* Summary Stats */}
         {results.length > 0 && (
-          <div className="grid grid-cols-5 gap-4 mb-8">
-            <div className="bg-white rounded-xl p-4 shadow-sm border">
-              <div className="text-sm text-gray-500">Pass Rate</div>
-              <div className={cn(
-                "text-3xl font-bold",
-                passCount === results.length ? "text-green-600" : "text-yellow-600"
-              )}>
-                {passCount}/{results.length}
+          <>
+            {/* Fairness Metrics Row */}
+            <div className="grid grid-cols-5 gap-4 mb-4">
+              <div className="bg-white rounded-xl p-4 shadow-sm border">
+                <div className="text-sm text-gray-500">Pass Rate</div>
+                <div className={cn(
+                  "text-3xl font-bold",
+                  passCount === results.length ? "text-green-600" : "text-yellow-600"
+                )}>
+                  {passCount}/{results.length}
+                </div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border">
+                <div className="text-sm text-gray-500">Avg Nash Welfare</div>
+                <div className="text-3xl font-bold text-indigo-600">
+                  {(avgNash * 100).toFixed(0)}%
+                </div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border">
+                <div className="text-sm text-gray-500">Avg Gini</div>
+                <div className={cn(
+                  "text-3xl font-bold",
+                  avgGini < 0.2 ? "text-green-600" :
+                  avgGini < 0.4 ? "text-yellow-600" : "text-red-600"
+                )}>
+                  {(avgGini * 100).toFixed(0)}%
+                </div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border">
+                <div className="text-sm text-gray-500">Avg Min Satisfaction</div>
+                <div className="text-3xl font-bold text-gray-700">
+                  {(avgMinSat * 100).toFixed(0)}%
+                </div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border">
+                <div className="text-sm text-gray-500">Constraint Violations</div>
+                <div className={cn(
+                  "text-3xl font-bold",
+                  results.every(r => r.hardConstraintViolations === 0) ? "text-green-600" : "text-red-600"
+                )}>
+                  {results.reduce((sum, r) => sum + r.hardConstraintViolations, 0)}
+                </div>
               </div>
             </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border">
-              <div className="text-sm text-gray-500">Avg Nash Welfare</div>
-              <div className="text-3xl font-bold text-indigo-600">
-                {(avgNash * 100).toFixed(0)}%
+
+            {/* IR Metrics Row */}
+            <div className="grid grid-cols-3 gap-4 mb-8">
+              <div className="bg-white rounded-xl p-4 shadow-sm border border-indigo-100">
+                <div className="text-sm text-gray-500">Avg Precision@3</div>
+                <div className="text-3xl font-bold text-indigo-600">
+                  {(avgP3 * 100).toFixed(0)}%
+                </div>
+                <div className="text-xs text-gray-400 mt-1">Relevant in top 3</div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border border-indigo-100">
+                <div className="text-sm text-gray-500">Avg NDCG@5</div>
+                <div className="text-3xl font-bold text-indigo-600">
+                  {(avgNDCG5 * 100).toFixed(0)}%
+                </div>
+                <div className="text-xs text-gray-400 mt-1">Ranking quality at 5</div>
+              </div>
+              <div className="bg-white rounded-xl p-4 shadow-sm border border-indigo-100">
+                <div className="text-sm text-gray-500">Nash Lift vs Popularity</div>
+                <div className={cn(
+                  "text-3xl font-bold",
+                  avgNashLift > 0 ? "text-green-600" : "text-red-600"
+                )}>
+                  {avgNashLift >= 0 ? '+' : ''}{(avgNashLift * 100).toFixed(0)}%
+                </div>
+                <div className="text-xs text-gray-400 mt-1">Improvement over baseline</div>
               </div>
             </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border">
-              <div className="text-sm text-gray-500">Avg Gini</div>
-              <div className={cn(
-                "text-3xl font-bold",
-                avgGini < 0.2 ? "text-green-600" :
-                avgGini < 0.4 ? "text-yellow-600" : "text-red-600"
-              )}>
-                {(avgGini * 100).toFixed(0)}%
-              </div>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border">
-              <div className="text-sm text-gray-500">Avg Min Satisfaction</div>
-              <div className="text-3xl font-bold text-gray-700">
-                {(avgMinSat * 100).toFixed(0)}%
-              </div>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border">
-              <div className="text-sm text-gray-500">Constraint Violations</div>
-              <div className={cn(
-                "text-3xl font-bold",
-                results.every(r => r.hardConstraintViolations === 0) ? "text-green-600" : "text-red-600"
-              )}>
-                {results.reduce((sum, r) => sum + r.hardConstraintViolations, 0)}
-              </div>
-            </div>
-          </div>
+          </>
         )}
 
         {/* Scenario Results */}
@@ -230,9 +289,9 @@ export default function EvalPage() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-xs text-gray-400">Min Sat</div>
-                        <div className="font-mono">
-                          {(result.fairnessResult.metrics.egalitarian * 100).toFixed(0)}%
+                        <div className="text-xs text-gray-400">P@3</div>
+                        <div className="font-mono text-indigo-500">
+                          {((result.evalMetrics?.precisionAt3 || 0) * 100).toFixed(0)}%
                         </div>
                       </div>
                     </>
@@ -307,6 +366,105 @@ export default function EvalPage() {
                     </div>
                   </div>
 
+                  {/* IR Metrics */}
+                  {result.evalMetrics && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500 uppercase mb-2">IR Evaluation Metrics</div>
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="bg-white rounded-lg p-3 border text-center">
+                          <div className="text-lg font-bold text-indigo-600">
+                            {(result.evalMetrics.precisionAt3 * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-xs text-gray-400">P@3</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border text-center">
+                          <div className="text-lg font-bold text-indigo-600">
+                            {(result.evalMetrics.precisionAt5 * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-xs text-gray-400">P@5</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border text-center">
+                          <div className="text-lg font-bold text-indigo-600">
+                            {(result.evalMetrics.ndcgAt5 * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-xs text-gray-400">NDCG@5</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border text-center">
+                          <div className="text-lg font-bold text-indigo-600">
+                            {(result.evalMetrics.ndcgAt10 * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-xs text-gray-400">NDCG@10</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Baseline Comparison */}
+                  {result.evalMetrics && result.evalMetrics.baselineComparisons.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500 uppercase mb-2 flex items-center gap-1">
+                        <TrendingUp size={12} />
+                        Baseline Comparison
+                      </div>
+                      <div className="bg-white rounded-lg border overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-gray-50 border-b">
+                              <th className="text-left px-3 py-2 text-xs text-gray-500">System</th>
+                              <th className="text-right px-3 py-2 text-xs text-gray-500">Nash</th>
+                              <th className="text-right px-3 py-2 text-xs text-gray-500">Avg Sat</th>
+                              <th className="text-right px-3 py-2 text-xs text-gray-500">Min Sat</th>
+                              <th className="text-right px-3 py-2 text-xs text-gray-500">Gini</th>
+                              <th className="text-left px-3 py-2 text-xs text-gray-500">Top Pick</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.evalMetrics.baselineComparisons.map((b: BaselineComparison, i: number) => (
+                              <tr key={i} className={cn(
+                                "border-b last:border-0",
+                                i === 0 && "bg-indigo-50"
+                              )}>
+                                <td className={cn(
+                                  "px-3 py-2 font-medium",
+                                  i === 0 ? "text-indigo-700" : "text-gray-600"
+                                )}>
+                                  {b.systemName}
+                                </td>
+                                <td className="text-right px-3 py-2 font-mono">
+                                  {(b.nashWelfare * 100).toFixed(0)}%
+                                </td>
+                                <td className="text-right px-3 py-2 font-mono">
+                                  {(b.utilitarian * 100).toFixed(0)}%
+                                </td>
+                                <td className="text-right px-3 py-2 font-mono">
+                                  {(b.egalitarian * 100).toFixed(0)}%
+                                </td>
+                                <td className="text-right px-3 py-2 font-mono">
+                                  {(b.gini * 100).toFixed(0)}%
+                                </td>
+                                <td className="px-3 py-2 text-xs text-gray-500 truncate max-w-[150px]">
+                                  {b.topPick}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Retrieval Diagnostics */}
+                  {result.retrievalDiagnostics && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Retrieval Pipeline</div>
+                      <div className="flex gap-4 text-xs text-gray-500">
+                        <span>Sparse candidates: <b>{result.retrievalDiagnostics.sparseCount}</b></span>
+                        <span>Dense candidates: <b>{result.retrievalDiagnostics.denseCount}</b></span>
+                        <span>Overlap: <b>{result.retrievalDiagnostics.overlapCount}</b></span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Constraint Audit */}
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Constraint Violation Audit</div>
@@ -329,7 +487,7 @@ export default function EvalPage() {
           ))}
         </div>
 
-        {/* Fairness Distribution Charts (simple CSS bars) */}
+        {/* Fairness Distribution Charts */}
         {results.length > 0 && (
           <div className="mt-8">
             <h2 className="text-lg font-semibold text-gray-700 flex items-center gap-2 mb-4">
@@ -384,9 +542,9 @@ export default function EvalPage() {
                 </div>
               </div>
 
-              {/* Minimum Satisfaction Distribution */}
+              {/* NDCG@5 Distribution */}
               <div className="bg-white rounded-xl border p-4 shadow-sm">
-                <div className="text-sm font-semibold text-gray-600 mb-3">Min Satisfaction by Scenario</div>
+                <div className="text-sm font-semibold text-gray-600 mb-3">NDCG@5 by Scenario</div>
                 <div className="space-y-2">
                   {results.map((r, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -395,14 +553,14 @@ export default function EvalPage() {
                         <div
                           className={cn(
                             "h-full rounded-full",
-                            (r.fairnessResult?.metrics.egalitarian || 0) > 0.5 ? "bg-green-500" :
-                            (r.fairnessResult?.metrics.egalitarian || 0) > 0.3 ? "bg-yellow-500" : "bg-orange-500"
+                            (r.evalMetrics?.ndcgAt5 || 0) > 0.7 ? "bg-green-500" :
+                            (r.evalMetrics?.ndcgAt5 || 0) > 0.4 ? "bg-yellow-500" : "bg-orange-500"
                           )}
-                          style={{ width: `${(r.fairnessResult?.metrics.egalitarian || 0) * 100}%` }}
+                          style={{ width: `${(r.evalMetrics?.ndcgAt5 || 0) * 100}%` }}
                         />
                       </div>
                       <span className="text-xs font-mono w-10 text-right">
-                        {((r.fairnessResult?.metrics.egalitarian || 0) * 100).toFixed(0)}%
+                        {((r.evalMetrics?.ndcgAt5 || 0) * 100).toFixed(0)}%
                       </span>
                     </div>
                   ))}
