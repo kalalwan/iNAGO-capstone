@@ -114,19 +114,21 @@ export default function ChatSession({ session: initialSession, currentUserId, on
       );
       setConvState(updatedState);
       if (systemResponse) {
-        addSystemMessage(session.id, systemResponse);
-        const refreshed = getSession(session.id);
-        if (refreshed) setSession(refreshed);
+        (async () => {
+          await addSystemMessage(session.id, systemResponse);
+          const refreshed = await getSession(session.id);
+          if (refreshed) setSession(refreshed);
+        })();
       }
     }
   // Only run once on mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Refresh session from localStorage periodically (for multi-tab sync)
+  // Refresh session from server periodically (for multi-user sync)
   useEffect(() => {
-    const interval = setInterval(() => {
-      const refreshed = getSession(session.id);
+    const interval = setInterval(async () => {
+      const refreshed = await getSession(session.id);
       if (refreshed) {
         setSession(refreshed);
       }
@@ -174,11 +176,11 @@ export default function ChatSession({ session: initialSession, currentUserId, on
   const handleSend = async () => {
     if (!input.trim() || !currentUser) return;
 
-    const newMsg = storeAddMessage(session.id, currentUserId, input.trim());
+    const newMsg = await storeAddMessage(session.id, currentUserId, input.trim());
     if (!newMsg) return;
 
     // Refresh session from store
-    let refreshed = getSession(session.id);
+    let refreshed = await getSession(session.id);
     if (refreshed) {
       setSession(refreshed);
     }
@@ -198,15 +200,15 @@ export default function ChatSession({ session: initialSession, currentUserId, on
         const user = refreshed.users.find(u => u.id === latestCritique.userId);
         if (user) {
           user.profile = handleCritique(latestCritique, user.profile);
-          updateSession(refreshed);
+          await updateSession(refreshed);
         }
       }
 
       setConvState(updatedState);
 
       if (systemResponse) {
-        addSystemMessage(session.id, systemResponse);
-        refreshed = getSession(session.id);
+        await addSystemMessage(session.id, systemResponse);
+        refreshed = await getSession(session.id);
         if (refreshed) setSession(refreshed);
       }
 
@@ -249,7 +251,7 @@ export default function ChatSession({ session: initialSession, currentUserId, on
 
         // Update profiles in session
         if (data.profiles) {
-          const refreshed = getSession(currentSession.id);
+          const refreshed = await getSession(currentSession.id);
           if (refreshed) {
             for (const [userId, profile] of Object.entries(data.profiles)) {
               const user = refreshed.users.find(u => u.id === userId);
@@ -257,7 +259,7 @@ export default function ChatSession({ session: initialSession, currentUserId, on
                 user.profile = profile as StructuredUserProfile;
               }
             }
-            updateSession(refreshed);
+            await updateSession(refreshed);
             setSession(refreshed);
           }
         }
@@ -315,12 +317,12 @@ export default function ChatSession({ session: initialSession, currentUserId, on
     }
   };
 
-  const resetChat = () => {
-    const refreshed = getSession(session.id);
+  const resetChat = async () => {
+    const refreshed = await getSession(session.id);
     if (refreshed) {
       refreshed.messages = [];
       refreshed.recommendations = null;
-      updateSession(refreshed);
+      await updateSession(refreshed);
       setSession(refreshed);
     }
     setPreferences({});
@@ -331,23 +333,23 @@ export default function ChatSession({ session: initialSession, currentUserId, on
     setInput('');
   };
 
-  const resetUserProfile = (userId: string) => {
-    const refreshed = getSession(session.id);
+  const resetUserProfile = async (userId: string) => {
+    const refreshed = await getSession(session.id);
     if (refreshed) {
       const user = refreshed.users.find(u => u.id === userId);
       if (user) {
         user.profile = createEmptyProfile(userId, user.name, user.color);
-        updateSession(refreshed);
+        await updateSession(refreshed);
         setSession(refreshed);
       }
     }
   };
 
-  const handleAskQuestions = () => {
+  const handleAskQuestions = async () => {
     const questions = generateElicitationQuestions(session.users);
     if (questions.length > 0) {
-      addSystemMessage(session.id, questions[0].question);
-      const refreshed = getSession(session.id);
+      await addSystemMessage(session.id, questions[0].question);
+      const refreshed = await getSession(session.id);
       if (refreshed) setSession(refreshed);
     }
   };

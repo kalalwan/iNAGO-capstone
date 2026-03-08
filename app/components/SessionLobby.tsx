@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Session } from '@/lib/types';
 import { createSession, joinSession, listRecentSessions, deleteSession } from '@/lib/session-store';
 import { Plus, LogIn, Copy, Check, ArrowRight, Trash2, Clock, Users } from 'lucide-react';
@@ -20,25 +20,31 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
   const [createdSession, setCreatedSession] = useState<{ session: Session; userId: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [recentSessions, setRecentSessions] = useState<{ id: string; createdAt: number; userCount: number; hostName: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Initialize recent sessions on mount (client-only)
-  const [initialized, setInitialized] = useState(false);
-  if (!initialized && typeof window !== 'undefined') {
-    setRecentSessions(listRecentSessions());
-    setInitialized(true);
-  }
+  // Load recent sessions on mount
+  useEffect(() => {
+    listRecentSessions().then(setRecentSessions);
+  }, []);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!name.trim()) {
       setError('Please enter your name');
       return;
     }
     setError('');
-    const result = createSession(name.trim());
-    setCreatedSession(result);
+    setIsLoading(true);
+    try {
+      const result = await createSession(name.trim());
+      setCreatedSession(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create session');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     if (!name.trim()) {
       setError('Please enter your name');
       return;
@@ -48,21 +54,35 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
       return;
     }
     setError('');
-    const result = joinSession(sessionCode.trim().toUpperCase(), name.trim());
-    if ('error' in result) {
-      setError(result.error);
-      return;
+    setIsLoading(true);
+    try {
+      const result = await joinSession(sessionCode.trim().toUpperCase(), name.trim());
+      if ('error' in result) {
+        setError(result.error);
+        return;
+      }
+      onSessionReady(result.session, result.userId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to join session');
+    } finally {
+      setIsLoading(false);
     }
-    onSessionReady(result.session, result.userId);
   };
 
-  const handleRejoin = (sessionId: string) => {
-    const result = joinSession(sessionId, name.trim() || 'Returning User');
-    if ('error' in result) {
-      setError(result.error);
-      return;
+  const handleRejoin = async (sessionId: string) => {
+    setIsLoading(true);
+    try {
+      const result = await joinSession(sessionId, name.trim() || 'Returning User');
+      if ('error' in result) {
+        setError(result.error);
+        return;
+      }
+      onSessionReady(result.session, result.userId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to rejoin session');
+    } finally {
+      setIsLoading(false);
     }
-    onSessionReady(result.session, result.userId);
   };
 
   const handleCopyCode = () => {
@@ -73,9 +93,10 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
     }
   };
 
-  const handleDeleteSession = (sessionId: string) => {
-    deleteSession(sessionId);
-    setRecentSessions(listRecentSessions());
+  const handleDeleteSession = async (sessionId: string) => {
+    await deleteSession(sessionId);
+    const updated = await listRecentSessions();
+    setRecentSessions(updated);
   };
 
   const formatTime = (timestamp: number) => {
@@ -190,10 +211,10 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
               {error && <p className="text-red-500 text-sm">{error}</p>}
               <button
                 onClick={handleCreate}
-                disabled={!name.trim()}
+                disabled={!name.trim() || isLoading}
                 className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create & Get Code
+                {isLoading ? 'Creating...' : 'Create & Get Code'}
               </button>
             </div>
           ) : (
@@ -271,11 +292,11 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
           {error && <p className="text-red-500 text-sm">{error}</p>}
           <button
             onClick={handleJoin}
-            disabled={!name.trim() || sessionCode.length !== 6}
+            disabled={!name.trim() || sessionCode.length !== 6 || isLoading}
             className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Users size={18} />
-            Join Session
+            {isLoading ? 'Joining...' : 'Join Session'}
           </button>
         </div>
       </div>

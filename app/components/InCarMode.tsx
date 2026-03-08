@@ -100,10 +100,10 @@ export default function InCarMode({
   const handleSend = async () => {
     if (!input.trim() || !currentUser) return;
 
-    const newMsg = storeAddMessage(session.id, currentUserId, input.trim());
+    const newMsg = await storeAddMessage(session.id, currentUserId, input.trim());
     if (!newMsg) return;
 
-    let refreshed = getSession(session.id);
+    let refreshed = await getSession(session.id);
     if (refreshed) onSessionChange(refreshed);
     setInput('');
 
@@ -120,15 +120,15 @@ export default function InCarMode({
         const user = refreshed.users.find(u => u.id === latestCritique.userId);
         if (user) {
           user.profile = handleCritique(latestCritique, user.profile);
-          updateSession(refreshed);
+          await updateSession(refreshed);
         }
       }
 
       onConvStateChange(updatedState);
 
       if (systemResponse) {
-        addSystemMessage(session.id, systemResponse);
-        refreshed = getSession(session.id);
+        await addSystemMessage(session.id, systemResponse);
+        refreshed = await getSession(session.id);
         if (refreshed) onSessionChange(refreshed);
       }
 
@@ -160,13 +160,13 @@ export default function InCarMode({
       const data = await res.json();
 
       if (!data.error && data.profiles) {
-        const refreshed = getSession(currentSession.id);
+        const refreshed = await getSession(currentSession.id);
         if (refreshed) {
           for (const [userId, profile] of Object.entries(data.profiles)) {
             const user = refreshed.users.find(u => u.id === userId);
             if (user) user.profile = profile as StructuredUserProfile;
           }
-          updateSession(refreshed);
+          await updateSession(refreshed);
           onSessionChange(refreshed);
         }
       }
