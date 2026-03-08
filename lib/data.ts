@@ -4,6 +4,7 @@ import restaurantsData from './restaurants.json';
 // Import 356 real Toronto restaurants from Yelp data
 export const RESTAURANTS: Restaurant[] = restaurantsData as Restaurant[];
 
+// Legacy hardcoded users — kept only for test fixtures / backward compatibility
 export const USERS = [
   { id: "u1", name: "Aisha", color: "bg-green-100 border-green-300" }, // Vegan
   { id: "u2", name: "John", color: "bg-blue-100 border-blue-300" },   // BBQ Lover

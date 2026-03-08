@@ -215,6 +215,54 @@ export interface ExtractedPreferences {
 }
 
 // ============================================
+// Session Types
+// ============================================
+
+export interface Session {
+  id: string;                          // 6-char alphanumeric code (e.g., "X7K2M9")
+  createdAt: number;                   // timestamp
+  createdBy: string;                   // userId of creator
+  status: 'waiting' | 'active' | 'recommending' | 'complete';
+  users: SessionUser[];                // participants
+  messages: SessionMessage[];          // all chat messages
+  recommendations: RecommendationResult | null;
+  settings: SessionSettings;
+}
+
+export interface SessionUser {
+  id: string;                          // uuid
+  name: string;
+  color: string;                       // auto-assigned from palette
+  joinedAt: number;
+  isHost: boolean;
+  profile: StructuredUserProfile;
+}
+
+export interface SessionMessage {
+  id: string;
+  userId: string;
+  userName: string;
+  userColor: string;
+  content: string;
+  timestamp: number;
+  type?: 'user' | 'system';
+  extractedPreferences?: Partial<ExtractedPreferences>;
+}
+
+export interface SessionSettings {
+  maxUsers: number;                    // default 6
+  fairnessMode: 'balanced' | 'egalitarian' | 'utilitarian';
+  allowLateJoin: boolean;              // can users join after chat starts
+}
+
+export interface RecommendationResult {
+  candidates: ScoredRestaurant[];
+  recommendation: string;
+  fairnessResult: FairnessResult;
+  generatedAt: number;
+}
+
+// ============================================
 // Legacy Types (for backwards compatibility)
 // ============================================
 

@@ -48,7 +48,7 @@ export async function POST(req: Request) {
 
     // Get or create profile for this user
     const userName = messages.find((m: { userId: string; userName: string }) => m.userId === userId)?.userName || 'Unknown';
-    const userColor = getColorForUser(userId);
+    const userColor = getColorForUser(userId, profiles);
     let profile = getOrCreateProfile(profiles, userId, userName, userColor);
 
     // Apply local extraction immediately
@@ -146,8 +146,12 @@ export async function POST(req: Request) {
   });
 }
 
-// Helper to get color class for user
-function getColorForUser(userId: string): string {
+// Helper to get color class for user — dynamically uses existing profile color or falls back
+function getColorForUser(userId: string, existingProfiles?: Record<string, StructuredUserProfile>): string {
+  if (existingProfiles && existingProfiles[userId]) {
+    return existingProfiles[userId].color;
+  }
+  // Legacy fallback
   const colors: Record<string, string> = {
     u1: 'bg-green-100 border-green-300',
     u2: 'bg-blue-100 border-blue-300',

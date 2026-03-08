@@ -14,6 +14,19 @@ import {
   FairnessResult,
 } from '@/lib/types';
 
+// Haversine distance calculation (km)
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // Cache for restaurant embeddings (persists across requests in serverless)
 let restaurantEmbeddingsCache: { id: string; embedding: number[] }[] | null = null;
 
@@ -34,6 +47,7 @@ export async function POST(req: Request) {
     preferences,
     messages,
     userProfiles,
+    userLocation,
   } = await req.json();
 
   // Convert profiles to StructuredUserProfile format
@@ -101,12 +115,25 @@ export async function POST(req: Request) {
       }
     }
 
-    // 4. Score all restaurants using cosine similarity
+    // 4. Score all restaurants using cosine similarity + optional distance
     const scoredRestaurants: ScoredRestaurant[] = RESTAURANTS.map((rest, idx) => {
       const embedding = restaurantEmbeddingsCache![idx].embedding;
+      let score = cosineSimilarity(queryVector, embedding);
+
+      // If user location is provided, add a small distance bonus for closer restaurants
+      if (userLocation && rest.lat && rest.lon) {
+        const distance = haversineDistance(
+          userLocation.lat, userLocation.lon,
+          rest.lat, rest.lon
+        );
+        // Closer restaurants get a slight bonus (up to +0.05 for very close, 0 for >20km)
+        const distanceBonus = Math.max(0, 0.05 * (1 - distance / 20));
+        score += distanceBonus;
+      }
+
       return {
         ...rest,
-        score: cosineSimilarity(queryVector, embedding)
+        score,
       };
     });
 
@@ -234,6 +261,9 @@ export async function POST(req: Request) {
         score: r.score,
         fairnessMetrics: r.fairnessMetrics,
         userSatisfaction: r.userSatisfaction,
+        distance: userLocation && r.lat && r.lon
+          ? haversineDistance(userLocation.lat, userLocation.lon, r.lat, r.lon)
+          : undefined,
       })),
       recommendation: fullRecommendation,
       totalRestaurants: RESTAURANTS.length,
@@ -248,7 +278,16 @@ export async function POST(req: Request) {
     });
 
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "Recommendation failed" }, { status: 500 });
+    console.error('Recommendation error:', error);
+
+    // If OpenAI API fails, return a graceful error with any available data
+    return NextResponse.json({
+      error: "Recommendation failed — please try again",
+      candidates: [],
+      recommendation: "Unable to generate a recommendation right now. Please try again in a moment.",
+      totalRestaurants: RESTAURANTS.length,
+      fairnessResult: null,
+      selectionMethod: 'error-fallback',
+    }, { status: 200 }); // Return 200 so the UI handles it gracefully
   }
 }
