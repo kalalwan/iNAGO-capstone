@@ -120,6 +120,29 @@ export default function SessionLobby({ onSessionReady }: SessionLobbyProps) {
             <p className="text-gray-500 text-lg">Fair group dining decisions, powered by AI</p>
           </div>
 
+          {/* How It Works */}
+          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 mb-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">How It Works</h3>
+            <ol className="space-y-2 text-sm text-gray-600">
+              <li className="flex gap-2">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">1</span>
+                <span><strong>Create a session</strong> and share the 6-character code with your group.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">2</span>
+                <span><strong>Chat naturally</strong> — mention dietary needs, cuisine cravings, budget, or location. The system extracts preferences automatically.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">3</span>
+                <span><strong>Generate a recommendation</strong> — the host clicks the button and the system finds the fairest restaurant for everyone using Nash Welfare optimization.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">4</span>
+                <span><strong>Vote on results</strong> — each member votes thumbs-up or down on the candidates so the group can see real agreement.</span>
+              </li>
+            </ol>
+          </div>
+
           <div className="space-y-4 mb-8">
             <button
               onClick={() => setState('create')}
