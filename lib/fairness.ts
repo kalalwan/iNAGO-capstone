@@ -357,10 +357,19 @@ export function calculateUserSatisfaction(
     }
   }
 
-  // Step 5: Compute final score
-  const manualBase = maxSoftScore > 0 ? softScore / maxSoftScore : 0.5;
-  const manualScore = Math.min(1, manualBase * 0.9 + bonusScore + 0.1);
+  // Step 5: Review quality signal
+  // Rating contributes a small quality bonus (0–0.1), scaled by evidence (review count).
+  // A 5-star restaurant with many reviews gets the full +0.1; a 3-star with few gets ~0.
+  const ratingNorm = Math.max(0, (restaurant.rating - 3) / 2);           // 0 at 3★, 1 at 5★
+  const evidenceNorm = Math.min(1, Math.log10(restaurant.reviewCount + 1) / Math.log10(501)); // saturates ~500 reviews
+  const reviewQualityBonus = ratingNorm * evidenceNorm * 0.1;
+  softScores['quality:reviewData'] = reviewQualityBonus;
 
+  // Step 6: Compute final score
+  const manualBase = maxSoftScore > 0 ? softScore / maxSoftScore : 0.5;
+  const manualScore = Math.min(1, manualBase * 0.9 + bonusScore + reviewQualityBonus + 0.1);
+
+  // Step 7: Blend with CBF vector score when index available
   let finalScore: number;
 
   if (index) {

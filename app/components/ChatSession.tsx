@@ -658,6 +658,7 @@ export default function ChatSession({ session: initialSession, currentUserId, on
             fairnessResult={fairnessResult}
             votes={votes}
             currentUserId={currentUserId}
+            users={session.users}
             onVote={handleVote}
           />
         </div>
